@@ -332,57 +332,87 @@ async function ip2countryIPv6(ip) {
 // DNS Response Parser (A + AAAA Records)
 // ============================================================
 
+// DNS Record Types
+const DNS_TYPE_A = 1;
+const DNS_TYPE_AAAA = 28;
+
+/**
+ * Skip a DNS name (handles both compressed and uncompressed formats).
+ * Returns the new offset after skipping the name.
+ */
+function skipDnsName(data, offset) {
+	if ((data[offset] & 0xc0) === 0xc0) {
+		return offset + 2; // Compressed name pointer
+	}
+	while (data[offset] !== 0) offset++;
+	return offset + 1;
+}
+
+/**
+ * Parse an A record (IPv4) from the DNS response.
+ */
+function parseARecord(data, offset) {
+	const ip = `${data[offset]}.${data[offset + 1]}.${data[offset + 2]}.${data[offset + 3]}`;
+	return { type: 'A', ip };
+}
+
+/**
+ * Parse an AAAA record (IPv6) from the DNS response.
+ */
+function parseAAAARecord(data, offset) {
+	const parts = [];
+	for (let j = 0; j < 8; j++) {
+		const segment = (data[offset + j * 2] << 8) | data[offset + j * 2 + 1];
+		parts.push(segment.toString(16));
+	}
+	return { type: 'AAAA', ip: parts.join(':') };
+}
+
+/**
+ * Parse a single DNS answer record.
+ * Returns { answer, newOffset } where answer may be null for unsupported record types.
+ */
+function parseAnswerRecord(data, offset) {
+	offset = skipDnsName(data, offset);
+
+	const type = (data[offset] << 8) | data[offset + 1];
+	const dataLen = (data[offset + 8] << 8) | data[offset + 9];
+	offset += 10; // Skip type(2) + class(2) + TTL(4) + dataLen(2)
+
+	let answer = null;
+	if (type === DNS_TYPE_A && dataLen === 4) {
+		answer = parseARecord(data, offset);
+	} else if (type === DNS_TYPE_AAAA && dataLen === 16) {
+		answer = parseAAAARecord(data, offset);
+	}
+
+	return { answer, newOffset: offset + dataLen };
+}
+
 function parseDnsResponse(buffer) {
-	const dnsResponse = new Uint8Array(buffer);
+	const data = new Uint8Array(buffer);
 	let offset = 0;
 
-	const id = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-	const flags = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-	const qdCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-	const anCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-	const nsCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-	const arCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
+	// Parse header (12 bytes)
+	const id = (data[offset] << 8) | data[offset + 1];
+	const flags = (data[offset + 2] << 8) | data[offset + 3];
+	const qdCount = (data[offset + 4] << 8) | data[offset + 5];
+	const anCount = (data[offset + 6] << 8) | data[offset + 7];
+	const nsCount = (data[offset + 8] << 8) | data[offset + 9];
+	const arCount = (data[offset + 10] << 8) | data[offset + 11];
+	offset = 12;
 
 	// Skip question section
 	for (let i = 0; i < qdCount; i++) {
-		while (dnsResponse[offset] !== 0) offset++;
-		offset += 5;
+		offset = skipDnsName(data, offset) + 4; // Skip QTYPE(2) + QCLASS(2)
 	}
 
 	// Parse answer section
 	const answers = [];
 	for (let i = 0; i < anCount; i++) {
-		// Handle name compression
-		if ((dnsResponse[offset] & 0xc0) === 0xc0) {
-			offset += 2;
-		} else {
-			while (dnsResponse[offset] !== 0) offset++;
-			offset++;
-		}
-
-		const type = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-		offset += 2; // Skip class
-		offset += 4; // Skip TTL
-		const dataLen = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-
-		if (type === 1 && dataLen === 4) {
-			// A record (IPv4)
-			const ip = [];
-			for (let j = 0; j < 4; j++) {
-				ip.push(dnsResponse[offset++]);
-			}
-			answers.push({ type: 'A', ip: ip.join('.') });
-		} else if (type === 28 && dataLen === 16) {
-			// AAAA record (IPv6)
-			const parts = [];
-			for (let j = 0; j < 8; j++) {
-				const segment = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-				parts.push(segment.toString(16));
-			}
-			answers.push({ type: 'AAAA', ip: parts.join(':') });
-		} else {
-			offset += dataLen;
-		}
+		const { answer, newOffset } = parseAnswerRecord(data, offset);
+		if (answer) answers.push(answer);
+		offset = newOffset;
 	}
 
 	return { id, flags, qdCount, anCount, nsCount, arCount, answers };
