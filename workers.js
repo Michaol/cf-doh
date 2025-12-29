@@ -1,328 +1,382 @@
-let geolite2_country = null;
-let CLOUDFLARE_API_TOKEN = null;
-let upstream_endpoint = 'https://dns.google/dns-query';
-// const dohUrl = 'https://unfiltered.adguard-dns.com/dns-query';
+/**
+ * Country-Aware DNS over HTTPS (DoH) Worker
+ *
+ * Features:
+ * - IPv4 & IPv6 support
+ * - L1 (Memory) + L2 (Cache API) caching
+ * - Upstream failover (Cloudflare primary, Google secondary)
+ * - AAAA record parsing
+ */
+
+// ============================================================
+// Global State & Cache
+// ============================================================
+
+let geoip_db = null;
+const MEM_CACHE = new Map();
+const MEM_CACHE_MAX_SIZE = 10000;
+const CACHE_TTL_SECONDS = 86400; // 24 hours
+
+// Upstream DNS servers (Cloudflare first for internal network optimization)
+const UPSTREAM_ENDPOINTS = [
+	'https://1.1.1.1/dns-query', // Cloudflare (Primary)
+	'https://dns.google/dns-query', // Google (Secondary)
+];
+
+// ============================================================
+// Main Handler
+// ============================================================
 
 export default {
-  async fetch(request, env, ctx) {
-    // https://developers.cloudflare.com/d1/best-practices/read-replication/#start-a-session-without-constraints
-    geolite2_country ??= env.geolite2_country.withSession();
-    CLOUDFLARE_API_TOKEN ??= env.CLOUDFLARE_API_TOKEN;
-    upstream_endpoint = env.upstream_endpoint || upstream_endpoint;
-    const url = new URL(request.url);
-    // Example: /client-ip/223.5.5.5/client-country/CN/alternative-ip/8.8.8.8/dns-query
-    // Extracted:
-    //  clientIp: 223.5.5.5
-    //  clientCountry: CN
-    //  alternativeIp: 8.8.8.8
-    const params = url.pathname.substring(1).split('/');
-    const clientIp = env.connectingIp ||
-      extractParam(params, 'client-ip') ||
-      request.headers.get('cf-connecting-ip')
-    const clientCountry = env.connectingIpCountry ||
-      extractParam(params, 'client-country') ||
-      request.headers.get('cf-ipcountry')
-    const alternativeIp = extractParam(params, 'alternative-ip') || params[0];
+	async fetch(request, env, ctx) {
+		// Initialize D1 with session for read replication
+		geoip_db ??= env.geolite2_country.withSession();
 
-    let queryData;
+		const url = new URL(request.url);
+		const params = url.pathname.substring(1).split('/');
 
-    if (request.method === 'GET') {
-      const dnsParam = url.searchParams.get('dns');
-      if (!dnsParam) {
-        return new Response('Missing dns parameter', { status: 400 });
-      }
-      // Decode the base64-encoded DNS query
-      const decodedQuery = atob(dnsParam);
-      queryData = new Uint8Array(decodedQuery.length);
-      for (let i = 0; i < decodedQuery.length; i++) {
-        queryData[i] = decodedQuery.charCodeAt(i);
-      }
-    } else if (request.method === 'POST') {
-      const originalQuery = await request.arrayBuffer();
-      queryData = new Uint8Array(originalQuery);
-    } else {
-      return new Response('Unsupported method', { status: 405 });
-    }
+		// Extract parameters
+		const clientIp = env.connectingIp || extractParam(params, 'client-ip') || request.headers.get('cf-connecting-ip');
+		const clientCountry = env.connectingIpCountry || extractParam(params, 'client-country') || request.headers.get('cf-ipcountry');
+		const alternativeIp = extractParam(params, 'alternative-ip') || params[0];
 
-    async function queryDnsWithClientIp() {
-      const response = await queryDns(queryData, clientIp)
-      const buffer = await response.arrayBuffer()
-      const dnsResponse = parseDnsResponse(buffer)
-      if (!dnsResponse.answers.length || !isIPv4(dnsResponse.answers[0] || !clientIp)) {
-        return new Response(buffer, response);
-      }
-      const queryCountryInfoStart = Date.now();
-      const responseIpSample = dnsResponse.answers[0];
-      const responseIpCountry = await ip2country(responseIpSample)
-      const queryCountryInfoEnd = Date.now();
-      console.log(`Response Sample: ${responseIpSample}, ${responseIpCountry}`)
-      console.log(`Query Country Info Time: ${queryCountryInfoEnd - queryCountryInfoStart}ms`)
-      if (clientCountry === responseIpCountry) {
-        return new Response(buffer, response);
-      }
-      return null
-    }
+		// Parse DNS query
+		let queryData;
+		if (request.method === 'GET') {
+			const dnsParam = url.searchParams.get('dns');
+			if (!dnsParam) {
+				return new Response('Missing dns parameter', { status: 400 });
+			}
+			const decodedQuery = atob(dnsParam);
+			queryData = new Uint8Array(decodedQuery.length);
+			for (let i = 0; i < decodedQuery.length; i++) {
+				queryData[i] = decodedQuery.charCodeAt(i);
+			}
+		} else if (request.method === 'POST') {
+			const originalQuery = await request.arrayBuffer();
+			queryData = new Uint8Array(originalQuery);
+		} else {
+			return new Response('Unsupported method', { status: 405 });
+		}
 
-    const queryUpstreamStart = Date.now();
-    const [response, alternativeResponse] = await Promise.all([
-      queryDnsWithClientIp(),
-      queryDns(queryData, alternativeIp)
-    ]);
-    const queryUpstreamEnd = Date.now();
+		// Smart DNS resolution with country matching
+		async function queryDnsWithClientIp() {
+			const response = await queryDns(queryData, clientIp);
+			const buffer = await response.arrayBuffer();
+			const dnsResponse = parseDnsResponse(buffer);
 
-    console.log(`Query Upstream Time: ${queryUpstreamEnd - queryUpstreamStart}ms`)
+			if (!dnsResponse.answers.length || !clientIp) {
+				return new Response(buffer, response);
+			}
 
-    if (response) {
-      return response;
-    } else {
-      return new Response(alternativeResponse.body, alternativeResponse);
-    }
-  }
+			const queryCountryInfoStart = Date.now();
+			const responseIpSample = dnsResponse.answers[0];
+			const responseIpCountry = await ip2country(responseIpSample.ip, ctx);
+			const queryCountryInfoEnd = Date.now();
+
+			console.log(`Response Sample: ${responseIpSample.ip} (${responseIpSample.type}), Country: ${responseIpCountry}`);
+			console.log(`Query Country Info Time: ${queryCountryInfoEnd - queryCountryInfoStart}ms`);
+
+			if (clientCountry === responseIpCountry) {
+				return new Response(buffer, response);
+			}
+			return null;
+		}
+
+		const queryUpstreamStart = Date.now();
+		const [response, alternativeResponse] = await Promise.all([queryDnsWithClientIp(), queryDns(queryData, alternativeIp)]);
+		const queryUpstreamEnd = Date.now();
+
+		console.log(`Query Upstream Time: ${queryUpstreamEnd - queryUpstreamStart}ms`);
+
+		if (response) {
+			return response;
+		} else {
+			return new Response(alternativeResponse.body, alternativeResponse);
+		}
+	},
 };
 
+// ============================================================
+// Parameter Extraction
+// ============================================================
+
 function extractParam(params, name) {
-  const index = params.indexOf(name);
-  if (~index) {
-    return params[index + 1];
-  }
-  return null;
+	const index = params.indexOf(name);
+	if (~index) {
+		return params[index + 1];
+	}
+	return null;
 }
+
+// ============================================================
+// DNS Query with Upstream Failover
+// ============================================================
 
 async function queryDns(queryData, clientIp) {
-  let newQueryData = queryData;
-  if (clientIp) {
-    // Extract DNS Header and Question Section
-    const [headerAndQuestion, questionEnd] = extractHeaderAndQuestion(queryData);
+	let newQueryData = queryData;
+	if (clientIp) {
+		const [headerAndQuestion] = extractHeaderAndQuestion(queryData);
+		const optRecord = createOptRecord(clientIp);
+		newQueryData = combineQueryData(headerAndQuestion, optRecord);
+	}
 
-    // Construct a new OPT record with ECS option
-    const optRecord = createOptRecord(clientIp);
+	const start = Date.now();
 
-    // Combine the header, question, and new OPT record to create a new query
-    newQueryData = combineQueryData(headerAndQuestion, optRecord);
-  }
+	// Try each upstream in order
+	for (let i = 0; i < UPSTREAM_ENDPOINTS.length; i++) {
+		const endpoint = UPSTREAM_ENDPOINTS[i];
+		try {
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
 
-  // Convert UInt8Array into Base64 string
-  // const encodedQuery = btoa(String.fromCharCode(...newQueryData));
+			const response = await fetch(endpoint, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/dns-message' },
+				body: newQueryData,
+				signal: controller.signal,
+			});
 
-  // Construct the URL with the encoded query
-  // const url = new URL(dohUrl);
-  // url.searchParams.set('dns', encodedQuery);
-  // const response = await fetch(url, {
-  //   headers: {
-  //     'Content-Type': 'application/dns-message'
-  //   },
-  //   cf: {
-  //     // https://developers.cloudflare.com/workers/examples/cache-using-fetch/
-  //     cacheTtl: 1,
-  //     cacheEverything: true,
-  //   }
-  // });
+			clearTimeout(timeout);
 
-  const start = Date.now();
-  // Forward the modified query
-  const response = await fetch(upstream_endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/dns-message'
-    },
-    body: newQueryData
-  });
-  console.log(`Simple DNS Query Time: ${Date.now() - start}ms`)
+			if (response.ok) {
+				console.log(`DNS Query via ${endpoint}: ${Date.now() - start}ms`);
+				return response;
+			}
+		} catch (err) {
+			console.log(`Upstream ${endpoint} failed: ${err.message}`);
+			// Continue to next upstream
+		}
+	}
 
-  return response
+	// All upstreams failed
+	throw new Error('All DNS upstreams failed');
 }
 
+// ============================================================
+// DNS Packet Manipulation
+// ============================================================
+
 function extractHeaderAndQuestion(data) {
-  let offset = 12; // DNS header is 12 bytes
+	let offset = 12; // DNS header is 12 bytes
+	const qdcount = (data[4] << 8) | data[5];
 
-  // Get the number of questions
-  const qdcount = (data[4] << 8) | data[5];
+	for (let i = 0; i < qdcount; i++) {
+		while (data[offset] !== 0) offset++;
+		offset += 5;
+	}
 
-  // Skip the Question Section
-  for (let i = 0; i < qdcount; i++) {
-    while (data[offset] !== 0) offset++; // Skip QNAME
-    offset += 5; // Skip QNAME (0 byte) + QTYPE (2 bytes) + QCLASS (2 bytes)
-  }
-
-  // Extract Header and Question Section
-  const headerAndQuestion = data.subarray(0, offset);
-
-  return [headerAndQuestion, offset];
+	return [data.subarray(0, offset), offset];
 }
 
 function createOptRecord(clientIp) {
-  let ecsData;
-  let family;
+	let ecsData;
+	let family;
 
-  if (isIPv4(clientIp)) {
-    // Convert client IP to bytes
-    const ipParts = clientIp.split('.').map(part => parseInt(part, 10));
-    family = 1; // IPv4
-    const prefixLength = 32; // Adjust the prefix length as needed
-    ecsData = [0, 8, 0, 8, 0, family, prefixLength, 0, ...ipParts];
-  } else if (isIPv6(clientIp)) {
-    // Convert client IP to bytes
-    const ipParts = ipv6ToBytes(clientIp);
-    family = 2; // IPv6
-    const prefixLength = 128; // Adjust the prefix length as needed
-    ecsData = [0, 8, 0, 20, 0, family, prefixLength, 0, ...ipParts];
-  } else {
-    throw new Error('Invalid IP address');
-  }
+	if (isIPv4(clientIp)) {
+		const ipParts = clientIp.split('.').map((part) => parseInt(part, 10));
+		family = 1;
+		const prefixLength = 24; // Use /24 for better CDN locality
+		ecsData = [0, 8, 0, 7, 0, family, prefixLength, 0, ...ipParts.slice(0, 3)];
+	} else if (isIPv6(clientIp)) {
+		const ipParts = ipv6ToBytes(clientIp);
+		family = 2;
+		const prefixLength = 48; // Use /48 for IPv6
+		ecsData = [0, 8, 0, 10, 0, family, prefixLength, 0, ...ipParts.slice(0, 6)];
+	} else {
+		throw new Error('Invalid IP address');
+	}
 
-  // Construct the OPT record
-  return new Uint8Array([
-    0, // Name (root)
-    0, 41, // Type: OPT
-    16, 0, // UDP payload size (default 4096)
-    0, 0, 0, 0, // Extended RCODE and flags
-    0, ecsData.length, // RD Length
-    ...ecsData
-  ]);
-}
-
-function isIPv4(ip) {
-  return ip.split('.').length === 4;
-}
-
-function isIPv6(ip) {
-  return ip.split(':').length > 2; // At least 3 groups separated by colons
-}
-
-function ipv6ToBytes(ipv6) {
-  // Split the IPv6 address into segments
-  let segments = ipv6.split(':');
-
-  // Expand shorthand notation (e.g., '::')
-  let expandedSegments = [];
-  for (let i = 0; i < segments.length; i++) {
-    if (segments[i] === '') {
-      // Insert zero segments for "::"
-      let zeroSegments = 8 - (segments.length - 1);
-      expandedSegments.push(...new Array(zeroSegments).fill('0000'));
-    } else {
-      expandedSegments.push(segments[i]);
-    }
-  }
-
-  // Convert each segment into a 16-bit number and then into 8-bit numbers
-  let bytes = [];
-  for (let segment of expandedSegments) {
-    let segmentValue = parseInt(segment, 16);
-    bytes.push((segmentValue >> 8) & 0xff); // High byte
-    bytes.push(segmentValue & 0xff);        // Low byte
-  }
-
-  return bytes;
+	return new Uint8Array([0, 0, 41, 16, 0, 0, 0, 0, 0, 0, ecsData.length, ...ecsData]);
 }
 
 function combineQueryData(headerAndQuestion, optRecord) {
-  // Combine the header and question section with the new OPT record
-  const newQueryData = new Uint8Array(headerAndQuestion.length + optRecord.length);
-  newQueryData.set(headerAndQuestion, 0);
-  newQueryData.set(optRecord, headerAndQuestion.length);
-  // https://en.wikipedia.org/wiki/Domain_Name_System#DNS_message_format
-  // Incrementing the QDCOUNT field (offset 3) to 32, signaling an additional record in the question section.
-  // Setting the ARCOUNT field (offset 11) to 1, indicating one additional record in the message.
-  newQueryData.set([32], 3);
-  newQueryData.set([1], 11);
-  return newQueryData;
+	const newQueryData = new Uint8Array(headerAndQuestion.length + optRecord.length);
+	newQueryData.set(headerAndQuestion, 0);
+	newQueryData.set(optRecord, headerAndQuestion.length);
+	newQueryData.set([32], 3);
+	newQueryData.set([1], 11);
+	return newQueryData;
 }
 
-// Convert IP to Number
-function ip2number(ip) {
-  return ip.split('.').reduce((int, octet) => {
-    return (int << 8) + parseInt(octet, 10);
-  }, 0) >>> 0; // Ensures the result is an unsigned 32-bit integer
+// ============================================================
+// IP Address Utilities
+// ============================================================
+
+function isIPv4(ip) {
+	return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip);
 }
 
-async function ip2country(ip) {
-  return ip2countryWithD1(ip)
-  // return ip2countryWithIplocationNet(ip)
-  // return ip2countryWithCloudflareRadar(ip)
+function isIPv6(ip) {
+	return ip.includes(':');
 }
 
-async function ip2countryWithD1(ip) {
-  const ipNumber = ip2number(ip);
-  const { country_iso_code } = await geolite2_country.prepare(
-    'select country_iso_code from merged_ipv4_data where network_start <= ?1 order by network_start desc limit 1;')
-    .bind(ipNumber)
-    .first();
-  return country_iso_code;
+function ip4ToNumber(ip) {
+	return (
+		ip.split('.').reduce((int, octet) => {
+			return (int << 8) + parseInt(octet, 10);
+		}, 0) >>> 0
+	);
 }
 
-// Unstable
-async function ip2countryWithIplocationNet(ip) {
-  const response = await fetch(`https://api.iplocation.net/?cmd=ip-country&ip=${ip}`)
-  const json = await response.json()
-  return json.country_code2
+function ipv6ToBytes(ipv6) {
+	let segments = ipv6.split(':');
+	let expandedSegments = [];
+
+	for (let i = 0; i < segments.length; i++) {
+		if (segments[i] === '') {
+			let zeroSegments = 8 - (segments.length - 1);
+			expandedSegments.push(...new Array(zeroSegments).fill('0000'));
+		} else {
+			expandedSegments.push(segments[i].padStart(4, '0'));
+		}
+	}
+
+	let bytes = [];
+	for (let segment of expandedSegments) {
+		let segmentValue = parseInt(segment, 16);
+		bytes.push((segmentValue >> 8) & 0xff);
+		bytes.push(segmentValue & 0xff);
+	}
+
+	return bytes;
 }
 
-// Too slow
-async function ip2countryWithCloudflareRadar(ip) {
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/radar/entities/ip?ip=${ip}`,
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${CLOUDFLARE_API_TOKEN}`
-      }
-    }
-  )
-  const json = await response.json()
-  return json.result.ip.location
+function ipv6ToHex(ipv6) {
+	const bytes = ipv6ToBytes(ipv6);
+	return bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+// ============================================================
+// IP to Country Lookup with Multi-Level Cache
+// ============================================================
+
+async function ip2country(ip, ctx) {
+	// L1: Memory Cache
+	if (MEM_CACHE.has(ip)) {
+		return MEM_CACHE.get(ip);
+	}
+
+	// L2: Cache API
+	const cache = caches.default;
+	const cacheKey = new Request(`https://geoip.internal/${ip}`);
+	let cachedResponse = await cache.match(cacheKey);
+
+	if (cachedResponse) {
+		const country = await cachedResponse.text();
+		updateMemCache(ip, country);
+		return country;
+	}
+
+	// L3: D1 Database Query
+	let country;
+	if (isIPv4(ip)) {
+		country = await ip2countryIPv4(ip);
+	} else {
+		country = await ip2countryIPv6(ip);
+	}
+
+	if (country) {
+		// Store in L1
+		updateMemCache(ip, country);
+
+		// Store in L2 (async, don't block response)
+		ctx.waitUntil(
+			cache.put(
+				cacheKey,
+				new Response(country, {
+					headers: { 'Cache-Control': `max-age=${CACHE_TTL_SECONDS}` },
+				})
+			)
+		);
+	}
+
+	return country;
+}
+
+function updateMemCache(ip, country) {
+	// Simple LRU: if at capacity, clear half the cache
+	if (MEM_CACHE.size >= MEM_CACHE_MAX_SIZE) {
+		const keysToDelete = Array.from(MEM_CACHE.keys()).slice(0, MEM_CACHE_MAX_SIZE / 2);
+		keysToDelete.forEach((key) => MEM_CACHE.delete(key));
+	}
+	MEM_CACHE.set(ip, country);
+}
+
+async function ip2countryIPv4(ip) {
+	const ipNumber = ip4ToNumber(ip);
+	const result = await geoip_db
+		.prepare('SELECT country_iso_code FROM merged_ipv4_data WHERE network_start <= ?1 ORDER BY network_start DESC LIMIT 1;')
+		.bind(ipNumber)
+		.first();
+	return result?.country_iso_code;
+}
+
+async function ip2countryIPv6(ip) {
+	const hexIp = ipv6ToHex(ip);
+	const result = await geoip_db
+		.prepare('SELECT country_iso_code FROM merged_ipv6_data WHERE network_start <= ?1 ORDER BY network_start DESC LIMIT 1;')
+		.bind(hexIp)
+		.first();
+	return result?.country_iso_code;
+}
+
+// ============================================================
+// DNS Response Parser (A + AAAA Records)
+// ============================================================
 
 function parseDnsResponse(buffer) {
-  const dnsResponse = new Uint8Array(buffer);
-  let offset = 0;
+	const dnsResponse = new Uint8Array(buffer);
+	let offset = 0;
 
-  // Parse the header (first 12 bytes)
-  const id = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-  const flags = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-  const qdCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-  const anCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-  const nsCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-  const arCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
+	const id = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
+	const flags = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
+	const qdCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
+	const anCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
+	const nsCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
+	const arCount = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
 
-  // Skip the question section (name + type + class)
-  for (let i = 0; i < qdCount; i++) {
-    while (dnsResponse[offset] !== 0)
-      offset++;
-    // Skip domain name
-    offset += 5;
-    // Skip null byte, type, and class
-  }
+	// Skip question section
+	for (let i = 0; i < qdCount; i++) {
+		while (dnsResponse[offset] !== 0) offset++;
+		offset += 5;
+	}
 
-  // Parse the answer section
-  const answers = [];
-  for (let i = 0; i < anCount; i++) {
-    const name = dnsResponse[offset++] << 8 | dnsResponse[offset++];
-    const type = dnsResponse[offset++] << 8 | dnsResponse[offset++];
-    const dnsClass = dnsResponse[offset++] << 8 | dnsResponse[offset++];
-    const ttl = (dnsResponse[offset++] << 24) | (dnsResponse[offset++] << 16) | (dnsResponse[offset++] << 8) | dnsResponse[offset++];
-    const dataLen = dnsResponse[offset++] << 8 | dnsResponse[offset++];
+	// Parse answer section
+	const answers = [];
+	for (let i = 0; i < anCount; i++) {
+		// Handle name compression
+		if ((dnsResponse[offset] & 0xc0) === 0xc0) {
+			offset += 2;
+		} else {
+			while (dnsResponse[offset] !== 0) offset++;
+			offset++;
+		}
 
-    if (type === 1) {
-      // A record (IPv4 address)
-      const ip = [];
-      for (let j = 0; j < dataLen; j++) {
-        ip.push(dnsResponse[offset++]);
-      }
-      answers.push(ip.join('.'));
-    } else {
-      // Skip other types
-      offset += dataLen;
-    }
-  }
+		const type = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
+		offset += 2; // Skip class
+		offset += 4; // Skip TTL
+		const dataLen = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
 
-  return {
-    id,
-    flags,
-    qdCount,
-    anCount,
-    nsCount,
-    arCount,
-    answers
-  };
+		if (type === 1 && dataLen === 4) {
+			// A record (IPv4)
+			const ip = [];
+			for (let j = 0; j < 4; j++) {
+				ip.push(dnsResponse[offset++]);
+			}
+			answers.push({ type: 'A', ip: ip.join('.') });
+		} else if (type === 28 && dataLen === 16) {
+			// AAAA record (IPv6)
+			const parts = [];
+			for (let j = 0; j < 8; j++) {
+				const segment = (dnsResponse[offset++] << 8) | dnsResponse[offset++];
+				parts.push(segment.toString(16));
+			}
+			answers.push({ type: 'AAAA', ip: parts.join(':') });
+		} else {
+			offset += dataLen;
+		}
+	}
+
+	return { id, flags, qdCount, anCount, nsCount, arCount, answers };
 }
