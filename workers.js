@@ -38,7 +38,19 @@ export default {
 		// Extract parameters
 		const clientIp = env.connectingIp || extractParam(params, 'client-ip') || request.headers.get('cf-connecting-ip');
 		const clientCountry = env.connectingIpCountry || extractParam(params, 'client-country') || request.headers.get('cf-ipcountry');
-		const alternativeIp = extractParam(params, 'alternative-ip') || params[0];
+
+		// Alternative IP: from URL param, or fall back to client IP (for simplified URL)
+		let alternativeIp = extractParam(params, 'alternative-ip');
+		if (!alternativeIp) {
+			// Check if first param looks like an IP address
+			const firstParam = params[0];
+			if (firstParam && /^[\d.:a-fA-F]+$/.test(firstParam) && (firstParam.includes('.') || firstParam.includes(':'))) {
+				alternativeIp = firstParam;
+			} else {
+				// No alternative IP provided, use client IP for both queries
+				alternativeIp = clientIp;
+			}
+		}
 
 		// Parse DNS query
 		let queryData;
@@ -48,10 +60,7 @@ export default {
 				return new Response('Missing dns parameter', { status: 400 });
 			}
 			const decodedQuery = atob(dnsParam);
-			queryData = new Uint8Array(decodedQuery.length);
-			for (let i = 0; i < decodedQuery.length; i++) {
-				queryData[i] = decodedQuery.charCodeAt(i);
-			}
+			queryData = Uint8Array.from(decodedQuery, (c) => c.codePointAt(0));
 		} else if (request.method === 'POST') {
 			const originalQuery = await request.arrayBuffer();
 			queryData = new Uint8Array(originalQuery);
@@ -124,8 +133,7 @@ async function queryDns(queryData, clientIp) {
 	const start = Date.now();
 
 	// Try each upstream in order
-	for (let i = 0; i < UPSTREAM_ENDPOINTS.length; i++) {
-		const endpoint = UPSTREAM_ENDPOINTS[i];
+	for (const endpoint of UPSTREAM_ENDPOINTS) {
 		try {
 			const controller = new AbortController();
 			const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
@@ -174,7 +182,7 @@ function createOptRecord(clientIp) {
 	let family;
 
 	if (isIPv4(clientIp)) {
-		const ipParts = clientIp.split('.').map((part) => parseInt(part, 10));
+		const ipParts = clientIp.split('.').map((part) => Number.parseInt(part, 10));
 		family = 1;
 		const prefixLength = 24; // Use /24 for better CDN locality
 		ecsData = [0, 8, 0, 7, 0, family, prefixLength, 0, ...ipParts.slice(0, 3)];
@@ -214,7 +222,7 @@ function isIPv6(ip) {
 function ip4ToNumber(ip) {
 	return (
 		ip.split('.').reduce((int, octet) => {
-			return (int << 8) + parseInt(octet, 10);
+			return (int << 8) + Number.parseInt(octet, 10);
 		}, 0) >>> 0
 	);
 }
@@ -223,20 +231,19 @@ function ipv6ToBytes(ipv6) {
 	let segments = ipv6.split(':');
 	let expandedSegments = [];
 
-	for (let i = 0; i < segments.length; i++) {
-		if (segments[i] === '') {
-			let zeroSegments = 8 - (segments.length - 1);
+	for (const segment of segments) {
+		if (segment === '') {
+			const zeroSegments = 8 - (segments.length - 1);
 			expandedSegments.push(...new Array(zeroSegments).fill('0000'));
 		} else {
-			expandedSegments.push(segments[i].padStart(4, '0'));
+			expandedSegments.push(segment.padStart(4, '0'));
 		}
 	}
 
 	let bytes = [];
 	for (let segment of expandedSegments) {
-		let segmentValue = parseInt(segment, 16);
-		bytes.push((segmentValue >> 8) & 0xff);
-		bytes.push(segmentValue & 0xff);
+		const segmentValue = Number.parseInt(segment, 16);
+		bytes.push((segmentValue >> 8) & 0xff, segmentValue & 0xff);
 	}
 
 	return bytes;
