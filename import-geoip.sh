@@ -134,7 +134,7 @@ curl -sS -X PUT "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOU
 # ============================================================
 echo "Applying migrations..."
 cd ..
-npx wrangler d1 migrations apply $database --remote -y
+npx wrangler d1 migrations apply $database --remote
 
 # Update wrangler.toml with database ID
 echo "Generating wrangler.toml..."
