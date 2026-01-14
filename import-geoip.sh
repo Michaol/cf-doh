@@ -130,25 +130,25 @@ curl -sS -X PUT "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOU
   -d '{"read_replication": {"mode": "auto"}}' > /dev/null
 
 # ============================================================
-# Step 6: Apply Migrations
+# Step 6: Generate wrangler.toml
 # ============================================================
-echo "Applying migrations..."
-cd ..
-npx wrangler d1 migrations apply $database --remote
-
-# Update wrangler.toml with database ID
 echo "Generating wrangler.toml..."
-cd tmp
+cd ..  # Back to project root
 sed -e "s/database_id = \".*\"/database_id = \"$database_id\"/" \
     -e "s/^workers_dev =.*/workers_dev = $WORKERS_DEV/" \
-    ../wrangler.template.toml > wrangler.toml
+    wrangler.template.toml > wrangler.toml
 
 # ============================================================
-# Step 7: Cleanup old migration files (keep last 3 data migrations)
+# Step 7: Apply Migrations
+# ============================================================
+echo "Applying migrations..."
+npx wrangler d1 migrations apply $database --remote
+
+# ============================================================
+# Step 8: Cleanup old migration files (keep last 3 data migrations)
 # ============================================================
 echo "Cleaning up old data migrations..."
-cd ../migrations
+cd migrations
 ls -1 0002_data_*.sql 2>/dev/null | head -n -3 | xargs -r rm -f || true
-cd ../tmp
 
 echo "Import complete!"
