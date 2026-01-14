@@ -1,75 +1,75 @@
-# Country-Aware DNS over HTTPS (DoH) Worker
+# 国家感知的 DNS over HTTPS (DoH) Worker
 
-A Cloudflare Worker that optimizes CDN routing by intelligently handling EDNS Client Subnet (ECS). It dual-resolves DNS queries using both the client's actual IP and an alternative IP (e.g., VPN exit IP) to select the best response, ensuring optimal performance and content availability.
+一个 Cloudflare Worker，通过智能处理 EDNS 客户端子网 (ECS) 来优化 CDN 路由。它使用客户端的实际 IP 和备用 IP（例如 VPN 出口 IP）双重解析 DNS 查询，以选择最佳响应，确保最优性能和内容可用性。
 
-[中文介绍](https://crzidea.com/#/article/introducing-crzidea-doh)
+[English Documentation](README_EN.md)
 
-![DoH Architecture Diagram](https://www.plantuml.com/plantuml/png/bP7HRjCm58RlznI7NWs9sXfi876rAKLT9T95BTc4fgboujFMmh63VRokF3sEILKQxMQNFZxVdo-_hpq9Hw7HP--KgNMG25kYrd_bt8aTsoZQXYfuTBKrX8PORHlUQc4wPkn9QbNnx79STACo_yuRuGbT7AsoZdWXrdRff4WZrEwFaYYujDkpvJukDkVJcmymcYgw3HNSrAIiyQCu6Rq_BEHvFERY9LT6djva3_6OQHlaMWk7y63TBtG3F9kSBaqk-liYhbfpNiPJwT5rquczXKmhD7Jafnq_jNQZ8pjVzl02TJ9FSXSCYg0rJD7E2f22H2KymjhP1WxYHoG9VMHGjjeAEOJ8mgdi4Ko_-ud112Ev_x_BdXhqqADbJruoME3lW9uEBzoXp8TAsaOemtR_C2RncTUfXR5g-UDiMQncnTDXLDjWoEtvOtPNpdyiVgwokyct9ouqeJE2r3CcwhwO9qeQFuuVTVlUfbD9bLwzecCyswIcZnZi56qXEa1iAReQf67IvxSaHQzNazAhV65mBxIIWX0S-g09x1fS7twL4WOF5YEkqSZGwBy0)
+![DoH 架构图](docs/doh_architecture.png)
 
-## Features
+## 功能特性
 
-- **Smart Routing**: Prioritizes local CDN nodes by checking if the resolved IP matches the client's country.
-- **VPN Optimization**: Falls back to an alternative IP resolution if the local lookup fails to match the country, ensuring access through VPNs.
-- **Privacy First**: Encrypts DNS queries via HTTPS, protecting against eavesdropping.
-- **D1 Database**: Uses Cloudflare D1 for efficient Geolocation lookups.
-- **IPv6 Support**: Full support for AAAA record parsing and IPv6 geolocation.
-- **Multi-Level Caching**: L1 (Memory) + L2 (Cache API) for ultra-low latency.
-- **Upstream Failover**: Automatic fallback between DNS upstreams (Cloudflare → Google).
+- **智能路由**: 通过检查解析的 IP 是否与客户端所在国家匹配，优先选择本地 CDN 节点。
+- **VPN 优化**: 如果本地查询未能匹配国家，则回退到备用 IP 解析，确保通过 VPN 访问。
+- **隐私优先**: 通过 HTTPS 加密 DNS 查询，防止窃听。
+- **D1 数据库**: 使用 Cloudflare D1 进行高效的地理位置查询。
+- **IPv6 支持**: 完整支持 AAAA 记录解析和 IPv6 地理定位。
+- **多级缓存**: L1（内存）+ L2（缓存 API）实现超低延迟。
+- **上游故障转移**: DNS 上游之间自动故障转移（Cloudflare → Google）。
 
-## Data Source
+## 数据源
 
-This project uses **[Loyalsoldier/geoip](https://github.com/Loyalsoldier/geoip)** for IP geolocation data. No registration or API keys are required!
+本项目使用 **[Loyalsoldier/geoip](https://github.com/Loyalsoldier/geoip)** 作为 IP 地理定位数据。无需注册或 API 密钥！
 
-## Prerequisites
+## 前置要求
 
-Before deploying, ensure you have:
+部署前，请确保你拥有：
 
-- A [Cloudflare](https://dash.cloudflare.com/sign-up) account.
-- A GitHub account.
+- 一个 [Cloudflare](https://dash.cloudflare.com/sign-up) 账户。
+- 一个 GitHub 账户。
 
-## Deployment
+## 部署
 
-This project uses **GitHub Actions** for automated deployment and initialization. You do not need to install any tools locally.
+本项目使用 **GitHub Actions** 进行自动化部署和初始化。你无需在本地安装任何工具。
 
-### 1. Fork the Repository
+### 1. Fork 仓库
 
-Fork this repository to your own GitHub account.
+将此仓库 Fork 到你自己的 GitHub 账户。
 
-### 2. Configure Secrets
+### 2. 配置 Secrets
 
-Go to your forked repository's **Settings** > **Secrets and variables** > **Actions**, and add the following **Repository secrets**:
+进入你 Fork 的仓库的 **Settings** > **Secrets and variables** > **Actions**，添加以下 **Repository secrets**：
 
-| Secret Name             | Description                                                                                                                                 |
-| :---------------------- | :------------------------------------------------------------------------------------------------------------------------------------------ |
-| `CLOUDFLARE_API_TOKEN`  | Your Cloudflare API Token (Permissions: `Worker Scripts: Edit`, `D1: Edit`). [Get it here](https://dash.cloudflare.com/profile/api-tokens). |
-| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare Account ID. Found in the URL of your Cloudflare Dashboard.                                                                  |
-| `UPSTREAM_ENDPOINT`     | (Optional) Custom primary upstream DoH server (Default: `https://1.1.1.1/dns-query`).                                                       |
+| Secret 名称             | 说明                                                                                                                                |
+| :---------------------- | :---------------------------------------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`  | 你的 Cloudflare API Token（权限：`Worker Scripts: Edit`、`D1: Edit`）。[在此获取](https://dash.cloudflare.com/profile/api-tokens)。 |
+| `CLOUDFLARE_ACCOUNT_ID` | 你的 Cloudflare Account ID。可在 Cloudflare 控制面板的 URL 中找到。                                                                 |
+| `UPSTREAM_ENDPOINT`     | （可选）自定义主上游 DoH 服务器（默认：`https://1.1.1.1/dns-query`）。                                                              |
 
-### 3. Deploy
+### 3. 部署
 
-The deployment workflow acts automatically:
+部署工作流自动运行：
 
-1. **Enable Workflows**: Go to the **Actions** tab in your repository and enable workflows if asked.
-2. **Trigger Deployment**: The workflow runs automatically on every push to the `main` branch or weekly (Tuesday 10:30 UTC). You can also manually trigger it from the **Actions** tab by selecting the "Deploy" workflow and clicking **Run workflow**.
+1. **启用工作流**: 进入仓库的 **Actions** 标签页，如有提示请启用工作流。
+2. **触发部署**: 工作流在每次推送到 `main` 分支时自动运行，也会在每周二 10:30 UTC 定时运行。你也可以从 **Actions** 标签页手动触发，选择 "Deploy" 工作流并点击 **Run workflow**。
 
-> **Automatic Setup**: The workflow will automatically download the GeoIP database from Loyalsoldier, create the D1 database, import the data (IPv4 & IPv6), and deploy the worker.
+> **自动设置**: 工作流将自动从 Loyalsoldier 下载 GeoIP 数据库，创建 D1 数据库，导入数据（IPv4 和 IPv6），并部署 Worker。
 
-## Configuration
+## 配置
 
-The worker is configured primarily through the **GitHub Secrets** defined above.
+Worker 主要通过上述定义的 **GitHub Secrets** 进行配置。
 
-### Optional Environment Variables
+### 可选环境变量
 
-These variables can be set in `wrangler.toml` or Cloudflare Dashboard to customize worker behavior:
+这些变量可以在 `wrangler.toml` 或 Cloudflare 控制面板中设置，以自定义 Worker 行为：
 
-| Variable             | Default             | Description                                  |
-| :------------------- | :------------------ | :------------------------------------------- |
-| `MEM_CACHE_MAX_SIZE` | `10000`             | Maximum entries in GeoIP memory cache        |
-| `CACHE_TTL_SECONDS`  | `86400`             | GeoIP cache TTL in seconds (24 hours)        |
-| `DEBUG`              | `false`             | Enable verbose logging (`true` to enable)    |
-| `COUNTRY_PRIORITY`   | `CN,HK,TW,JP,SG,US` | Comma-separated country priority for routing |
+| 变量                 | 默认值              | 说明                                |
+| :------------------- | :------------------ | :---------------------------------- |
+| `MEM_CACHE_MAX_SIZE` | `10000`             | GeoIP 内存缓存的最大条目数          |
+| `CACHE_TTL_SECONDS`  | `86400`             | GeoIP 缓存 TTL，单位为秒（24 小时） |
+| `DEBUG`              | `false`             | 启用详细日志（设置为 `true` 启用）  |
+| `COUNTRY_PRIORITY`   | `CN,HK,TW,JP,SG,US` | 路由的国家优先级，逗号分隔          |
 
-**Example wrangler.toml:**
+**wrangler.toml 示例:**
 
 ```toml
 [vars]
@@ -79,9 +79,9 @@ DEBUG = "true"
 COUNTRY_PRIORITY = "CN,HK,TW,JP,SG,US"
 ```
 
-## API Endpoints
+## API 端点
 
-### DoH Endpoint (RFC 8484)
+### DoH 端点 (RFC 8484)
 
 `GET/POST https://<your-worker-domain>/?dns=<BASE64_DNS_QUERY>`
 
@@ -91,78 +91,78 @@ COUNTRY_PRIORITY = "CN,HK,TW,JP,SG,US"
 GET https://<your-worker-domain>/resolve?name=example.com&type=A
 ```
 
-Returns Google DNS JSON API compatible response.
+返回兼容 Google DNS JSON API 的响应。
 
-### Health Check
+### 健康检查
 
 ```bash
 GET https://<your-worker-domain>/health
 ```
 
-### Statistics
+### 统计信息
 
 ```bash
 GET https://<your-worker-domain>/stats
 ```
 
-### IP Debug
+### IP 调试
 
 ```bash
 GET https://<your-worker-domain>/debug/ip/8.8.8.8
 ```
 
-## API Reference
+## API 参考
 
-The DoH endpoint accepts requests in the following format:
+DoH 端点接受以下格式的请求：
 
 `https://<your-worker-domain>/client-ip/<IP>/client-country/<COUNTRY_CODE>/alternative-ip/<ALT_IP>/dns-query`
 
-### Parameters
+### 参数
 
-| Parameter        | Description                                                          | Required | Source Priority                      |
-| :--------------- | :------------------------------------------------------------------- | :------- | :----------------------------------- |
-| `client-ip`      | The client's real IP address.                                        | No       | URL Path > `CF-Connecting-IP` header |
-| `client-country` | The 2-letter ISO country code of the client.                         | No       | URL Path > `CF-IPCountry` header     |
-| `alternative-ip` | The IP address to use for the secondary resolution (e.g., VPN exit). | Yes      | URL Path                             |
+| 参数             | 说明                                      | 必需 | 来源优先级                           |
+| :--------------- | :---------------------------------------- | :--- | :----------------------------------- |
+| `client-ip`      | 客户端的真实 IP 地址。                    | 否   | URL 路径 > `CF-Connecting-IP` 请求头 |
+| `client-country` | 客户端的 2 字母 ISO 国家代码。            | 否   | URL 路径 > `CF-IPCountry` 请求头     |
+| `alternative-ip` | 用于二次解析的 IP 地址（例如 VPN 出口）。 | 是   | URL 路径                             |
 
-### Example
+### 示例
 
 ```bash
 curl "https://doh.subdomain.workers.dev/client-ip/223.5.5.5/client-country/CN/alternative-ip/8.8.8.8/dns-query?dns=<BASE64_DNS_QUERY>"
 ```
 
-## Architecture
+## 架构
 
 ```text
 ┌─────────────┐     ┌──────────────────────────────────────────┐
-│   Client    │────▶│           Cloudflare Worker              │
+│   客户端    │────▶│           Cloudflare Worker              │
 └─────────────┘     │                                          │
                     │  ┌────────────────────────────────────┐  │
-                    │  │  Parallel DNS Queries              │  │
+                    │  │  并行 DNS 查询                      │  │
                     │  │  ┌──────────┐    ┌──────────────┐  │  │
-                    │  │  │ Client IP│    │Alternative IP│  │  │
+                    │  │  │ 客户端IP │    │   备用 IP    │  │  │
                     │  │  │   (ECS)  │    │    (ECS)     │  │  │
                     │  │  └────┬─────┘    └──────┬───────┘  │  │
                     │  └───────┼─────────────────┼──────────┘  │
                     │          ▼                 ▼              │
                     │  ┌───────────────────────────────────┐   │
-                    │  │    Upstream (CF 1.1.1.1 / Google) │   │
+                    │  │   上游 (CF 1.1.1.1 / Google)      │   │
                     │  └───────────────┬───────────────────┘   │
                     │                  ▼                       │
                     │  ┌───────────────────────────────────┐   │
-                    │  │   IP → Country Lookup             │   │
+                    │  │   IP → 国家查询                    │   │
                     │  │   ┌─────┐ ┌─────┐ ┌────┐          │   │
                     │  │   │ L1  │→│ L2  │→│ D1 │          │   │
-                    │  │   │ Mem │ │Cache│ │ DB │          │   │
+                    │  │   │内存 │ │缓存 │ │数据库│         │   │
                     │  │   └─────┘ └─────┘ └────┘          │   │
                     │  └───────────────────────────────────┘   │
                     │                  ▼                       │
                     │  ┌───────────────────────────────────┐   │
-                    │  │ Country Match? → Return Best IP   │   │
+                    │  │ 国家匹配？→ 返回最佳 IP           │   │
                     │  └───────────────────────────────────┘   │
                     └──────────────────────────────────────────┘
 ```
 
-## Contributing
+## 贡献
 
-Contributions are welcome! Please feel free to open issues or submit pull requests.
+欢迎贡献！请随时提交 issue 或 pull request。
