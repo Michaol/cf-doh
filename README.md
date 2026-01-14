@@ -39,11 +39,11 @@
 
 进入你 Fork 的仓库的 **Settings** > **Secrets and variables** > **Actions**，添加以下 **Repository secrets**：
 
-| Secret 名称             | 说明                                                                                                                                |
-| :---------------------- | :---------------------------------------------------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`  | 你的 Cloudflare API Token（权限：`Worker Scripts: Edit`、`D1: Edit`）。[在此获取](https://dash.cloudflare.com/profile/api-tokens)。 |
-| `CLOUDFLARE_ACCOUNT_ID` | 你的 Cloudflare Account ID。可在 Cloudflare 控制面板的 URL 中找到。                                                                 |
-| `UPSTREAM_ENDPOINT`     | （可选）自定义主上游 DoH 服务器（默认：`https://1.1.1.1/dns-query`）。                                                              |
+| Secret 名称             | 说明                                                                                                                                                                                                 |
+| :---------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`  | 你的 Cloudflare API Token。[在此获取](https://dash.cloudflare.com/profile/api-tokens)。<br>**必需权限 (Custom Token)**：<br>1. `Account` > `Worker Scripts` > `Edit`<br>2. `Account` > `D1` > `Edit` |
+| `CLOUDFLARE_ACCOUNT_ID` | 你的 Cloudflare Account ID。可在 Cloudflare 控制面板的 URL 中找到。                                                                                                                                  |
+| `UPSTREAM_ENDPOINT`     | （可选）自定义主上游 DoH 服务器（默认：`https://1.1.1.1/dns-query`）。                                                                                                                               |
 
 ### 3. 部署
 

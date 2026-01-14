@@ -39,11 +39,11 @@ Fork this repository to your own GitHub account.
 
 Go to your forked repository's **Settings** > **Secrets and variables** > **Actions**, and add the following **Repository secrets**:
 
-| Secret Name             | Description                                                                                                                                 |
-| :---------------------- | :------------------------------------------------------------------------------------------------------------------------------------------ |
-| `CLOUDFLARE_API_TOKEN`  | Your Cloudflare API Token (Permissions: `Worker Scripts: Edit`, `D1: Edit`). [Get it here](https://dash.cloudflare.com/profile/api-tokens). |
-| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare Account ID. Found in the URL of your Cloudflare Dashboard.                                                                  |
-| `UPSTREAM_ENDPOINT`     | (Optional) Custom primary upstream DoH server (Default: `https://1.1.1.1/dns-query`).                                                       |
+| Secret Name             | Description                                                                                                                                                                                                       |
+| :---------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`  | Your Cloudflare API Token. [Get it here](https://dash.cloudflare.com/profile/api-tokens).<br>**Required Permissions (Custom Token)**:<br>1. `Account` > `Worker Scripts` > `Edit`<br>2. `Account` > `D1` > `Edit` |
+| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare Account ID. Found in the URL of your Cloudflare Dashboard.                                                                                                                                        |
+| `UPSTREAM_ENDPOINT`     | (Optional) Custom primary upstream DoH server (Default: `https://1.1.1.1/dns-query`).                                                                                                                             |
 
 ### 3. Deploy
 
