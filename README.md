@@ -58,6 +58,25 @@ The deployment workflow acts automatically:
 
 The worker is configured primarily through the **GitHub Secrets** defined above.
 
+### Optional Environment Variables
+
+These variables can be set in `wrangler.toml` or Cloudflare Dashboard to customize worker behavior:
+
+| Variable             | Default | Description                               |
+| :------------------- | :------ | :---------------------------------------- |
+| `MEM_CACHE_MAX_SIZE` | `10000` | Maximum entries in memory cache (L1)      |
+| `CACHE_TTL_SECONDS`  | `86400` | Cache TTL in seconds (24 hours)           |
+| `DEBUG`              | `false` | Enable verbose logging (`true` to enable) |
+
+**Example wrangler.toml:**
+
+```toml
+[vars]
+MEM_CACHE_MAX_SIZE = "20000"
+CACHE_TTL_SECONDS = "43200"
+DEBUG = "true"
+```
+
 ## API Reference
 
 The DoH endpoint accepts requests in the following format:

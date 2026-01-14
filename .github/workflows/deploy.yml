@@ -2,7 +2,7 @@ name: Deploy to Cloudflare Workers
 
 on:
   schedule:
-    - cron: "30 10 * * 2"  # Every Tuesday at 10:30 UTC
+    - cron: '30 10 * * 2' # Every Tuesday at 10:30 UTC
   workflow_dispatch:
 
 jobs:
@@ -10,37 +10,50 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-npm-
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-maxminddb
+          restore-keys: ${{ runner.os }}-pip-
+
       - name: Install dependencies
         run: |
           npm install
           pip install maxminddb
-      
+
       - name: Import GeoIP data and deploy
         run: ./import-geoip.sh
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          UPSTREAM_ENDPOINT: ${{ secrets.UPSTREAM_ENDPOINT }}
-          WORKERS_DEV: ${{ secrets.WORKERS_DEV }}
-      
+          WORKERS_DEV: ${{ secrets.WORKERS_DEV || 'true' }}
+
       - name: Move wrangler config
         run: mv tmp/wrangler.toml .
-      
+
       - name: Deploy Worker
         run: npm run deploy
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      
+
       - name: Update release branch
         run: |
           mkdir release && cd release

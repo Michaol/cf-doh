@@ -175,3 +175,11 @@ tmp
 package-lock.json
 wrangler.toml
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Test files
+response.bin
+response.hex

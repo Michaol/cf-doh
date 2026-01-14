@@ -1,3 +1,10 @@
+-- ============================================================
+-- LEGACY FILE - Not used in current CI/CD pipeline
+-- This file was used for manual database merging with MaxMind GeoLite2.
+-- Current workflow uses extract_mmdb.py with Loyalsoldier/geoip data.
+-- Kept for reference purposes only.
+-- ============================================================
+
 CREATE TABLE IF NOT EXISTS merged_ipv4_data (
     network_start INTEGER,
     network_end INTEGER,

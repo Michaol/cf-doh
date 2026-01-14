@@ -1,3 +1,14 @@
+"""
+============================================================
+LEGACY FILE - Not used in current CI/CD pipeline
+
+This script was used to merge non-target countries into a single
+'OTHER' category to reduce database size. Current workflow uses
+the full Loyalsoldier/geoip dataset without filtering.
+
+Kept for reference purposes only.
+============================================================
+"""
 import sqlite3
 
 def merge_non_target_countries(source_db, target_db, target_countries):
