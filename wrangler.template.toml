@@ -1,13 +1,12 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "doh"
-main = "workers.js"
+main = "workers.ts"
 compatibility_date = "2024-08-15"
 workers_dev = true
 preview_urls = false
 
 [[d1_databases]]
-binding = "geolite2_country"
-database_name = ""
-database_id = ""
-#[placement]
-#mode = "smart"
+binding = "DB"
+database_name = "geolite2-country"
+database_id = "placeholder-will-be-replaced"
+migrations_dir = "migrations"
