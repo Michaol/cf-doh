@@ -84,8 +84,21 @@ echo "IPv6 records: $(sqlite3 $database_filename "SELECT COUNT(*) FROM ${merged_
 # Step 4: Export SQL dump for D1
 # ============================================================
 echo "Exporting SQL dump..."
-sqlite3 $database_filename ".schema ${merged_ipv4_table}" ".dump ${merged_ipv4_table} --data-only" > dump.sql
-sqlite3 $database_filename ".schema ${merged_ipv6_table}" ".dump ${merged_ipv6_table} --data-only" >> dump.sql
+{
+    # Drop tables first for idempotency
+    echo "DROP TABLE IF EXISTS ${merged_ipv4_table};"
+    echo "DROP TABLE IF EXISTS ${merged_ipv6_table};"
+    echo ""
+    
+    # Create tables (use IF NOT EXISTS for safety)
+    sqlite3 $database_filename ".schema ${merged_ipv4_table}" | sed 's/CREATE TABLE/CREATE TABLE IF NOT EXISTS/'
+    sqlite3 $database_filename ".schema ${merged_ipv6_table}" | sed 's/CREATE TABLE/CREATE TABLE IF NOT EXISTS/'
+    echo ""
+    
+    # Insert data only (skip CREATE statements)
+    sqlite3 $database_filename ".dump ${merged_ipv4_table}" | grep "^INSERT"
+    sqlite3 $database_filename ".dump ${merged_ipv6_table}" | grep "^INSERT"
+} > dump.sql
 
 # ============================================================
 # Step 5: Upload to Cloudflare D1
@@ -98,7 +111,7 @@ database="geoip_${database_version}_${database_location}"
 echo "Creating D1 database: $database"
 
 npx wrangler d1 create $database --location=$database_location || true
-npx wrangler d1 execute $database --yes --remote --file=dump.sql
+npx wrangler d1 execute $database -y --remote --file=dump.sql
 database_id=$(npx wrangler d1 info $database --json | jq --raw-output .uuid)
 
 # Enable read replication
