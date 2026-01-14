@@ -81,11 +81,20 @@ echo "IPv4 records: $(sqlite3 $database_filename "SELECT COUNT(*) FROM ${merged_
 echo "IPv6 records: $(sqlite3 $database_filename "SELECT COUNT(*) FROM ${merged_ipv6_table};")"
 
 # ============================================================
-# Step 4: Export SQL dump for D1
+# Step 4: Export SQL dump for D1 (idempotent)
 # ============================================================
 echo "Exporting SQL dump..."
-sqlite3 $database_filename ".schema ${merged_ipv4_table}" ".dump ${merged_ipv4_table} --data-only" > dump.sql
-sqlite3 $database_filename ".schema ${merged_ipv6_table}" ".dump ${merged_ipv6_table} --data-only" >> dump.sql
+{
+    # Drop existing tables for idempotent re-runs
+    echo "DROP TABLE IF EXISTS ${merged_ipv4_table};"
+    echo "DROP TABLE IF EXISTS ${merged_ipv6_table};"
+    
+    # Schema + Data
+    sqlite3 $database_filename ".schema ${merged_ipv4_table}"
+    sqlite3 $database_filename ".dump ${merged_ipv4_table} --data-only"
+    sqlite3 $database_filename ".schema ${merged_ipv6_table}"
+    sqlite3 $database_filename ".dump ${merged_ipv6_table} --data-only"
+} > dump.sql
 
 # ============================================================
 # Step 5: Upload to Cloudflare D1
