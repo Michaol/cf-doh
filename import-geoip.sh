@@ -81,27 +81,53 @@ echo "IPv4 records: $(sqlite3 $database_filename "SELECT COUNT(*) FROM ${merged_
 echo "IPv6 records: $(sqlite3 $database_filename "SELECT COUNT(*) FROM ${merged_ipv6_table};")"
 
 # ============================================================
-# Step 4: Export SQL dump for D1
+# Step 4: Export Schema (DDL only, no indexes yet)
 # ============================================================
-echo "Exporting SQL dump..."
+echo "Exporting schema..."
 {
-    # Drop tables first for idempotency
     echo "DROP TABLE IF EXISTS ${merged_ipv4_table};"
     echo "DROP TABLE IF EXISTS ${merged_ipv6_table};"
     echo ""
     
-    # Create tables (use IF NOT EXISTS for safety)
-    sqlite3 $database_filename ".schema ${merged_ipv4_table}" | sed 's/CREATE TABLE/CREATE TABLE IF NOT EXISTS/'
-    sqlite3 $database_filename ".schema ${merged_ipv6_table}" | sed 's/CREATE TABLE/CREATE TABLE IF NOT EXISTS/'
-    echo ""
+    # Create tables without indexes
+    sqlite3 $database_filename ".schema ${merged_ipv4_table}" | \
+        sed 's/CREATE TABLE/CREATE TABLE IF NOT EXISTS/' | \
+        grep -v "CREATE INDEX"
     
-    # Insert data only (skip CREATE statements)
-    sqlite3 $database_filename ".dump ${merged_ipv4_table}" | grep "^INSERT"
-    sqlite3 $database_filename ".dump ${merged_ipv6_table}" | grep "^INSERT"
-} > dump.sql
+    sqlite3 $database_filename ".schema ${merged_ipv6_table}" | \
+        sed 's/CREATE TABLE/CREATE TABLE IF NOT EXISTS/' | \
+        grep -v "CREATE INDEX"
+} > schema.sql
 
 # ============================================================
-# Step 5: Upload to Cloudflare D1
+# Step 5: Export Data in Batches
+# ============================================================
+echo "Exporting data in batches..."
+BATCH_SIZE=100000
+
+# Export IPv4 data and split into batches
+sqlite3 $database_filename ".dump ${merged_ipv4_table}" | grep "^INSERT" | \
+    split -l $BATCH_SIZE - batch_ipv4_
+
+# Export IPv6 data and split into batches
+sqlite3 $database_filename ".dump ${merged_ipv6_table}" | grep "^INSERT" | \
+    split -l $BATCH_SIZE - batch_ipv6_
+
+# Count batches
+batch_count=$(ls -1 batch_* 2>/dev/null | wc -l)
+echo "Created $batch_count data batches ($BATCH_SIZE rows each)"
+
+# ============================================================
+# Step 6: Export Indexes
+# ============================================================
+echo "Exporting indexes..."
+{
+    sqlite3 $database_filename ".schema ${merged_ipv4_table}" | grep "CREATE INDEX"
+    sqlite3 $database_filename ".schema ${merged_ipv6_table}" | grep "CREATE INDEX"
+} > indexes.sql
+
+# ============================================================
+# Step 7: Upload to Cloudflare D1
 # ============================================================
 if [ -z "$database_location" ]; then
     database_location="weur"
@@ -111,7 +137,27 @@ database="geoip_${database_version}_${database_location}"
 echo "Creating D1 database: $database"
 
 npx wrangler d1 create $database --location=$database_location || true
-npx wrangler d1 execute $database -y --remote --file=dump.sql
+
+# Import schema first
+echo "Importing schema..."
+npx wrangler d1 execute $database -y --remote --file=schema.sql
+
+# Import data batches
+echo "Importing data batches..."
+batch_num=1
+for batch_file in batch_*; do
+    echo "  [$batch_num/$batch_count] Importing $batch_file..."
+    npx wrangler d1 execute $database -y --remote --file=$batch_file || {
+        echo "Failed to import $batch_file"
+        exit 1
+    }
+    batch_num=$((batch_num + 1))
+done
+
+# Create indexes last (for better insert performance)
+echo "Creating indexes..."
+npx wrangler d1 execute $database -y --remote --file=indexes.sql
+
 database_id=$(npx wrangler d1 info $database --json | jq --raw-output .uuid)
 
 # Enable read replication
@@ -122,7 +168,7 @@ curl -sS -X PUT "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOU
   -d '{"read_replication": {"mode": "auto"}}' > /dev/null
 
 # ============================================================
-# Step 6: Generate wrangler.toml
+# Step 8: Generate wrangler.toml
 # ============================================================
 echo "Generating wrangler.toml..."
 sed -e "s/^database_name =.*/database_name = \"$database\"/" \
@@ -131,7 +177,7 @@ sed -e "s/^database_name =.*/database_name = \"$database\"/" \
     ../wrangler.template.toml > wrangler.toml
 
 # ============================================================
-# Step 7: Cleanup old databases (keep last 3)
+# Step 9: Cleanup old databases (keep last 3)
 # ============================================================
 echo "Cleaning up old databases..."
 num_databases_retained=3
