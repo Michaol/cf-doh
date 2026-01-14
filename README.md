@@ -62,11 +62,12 @@ The worker is configured primarily through the **GitHub Secrets** defined above.
 
 These variables can be set in `wrangler.toml` or Cloudflare Dashboard to customize worker behavior:
 
-| Variable             | Default | Description                               |
-| :------------------- | :------ | :---------------------------------------- |
-| `MEM_CACHE_MAX_SIZE` | `10000` | Maximum entries in memory cache (L1)      |
-| `CACHE_TTL_SECONDS`  | `86400` | Cache TTL in seconds (24 hours)           |
-| `DEBUG`              | `false` | Enable verbose logging (`true` to enable) |
+| Variable             | Default             | Description                                  |
+| :------------------- | :------------------ | :------------------------------------------- |
+| `MEM_CACHE_MAX_SIZE` | `10000`             | Maximum entries in GeoIP memory cache        |
+| `CACHE_TTL_SECONDS`  | `86400`             | GeoIP cache TTL in seconds (24 hours)        |
+| `DEBUG`              | `false`             | Enable verbose logging (`true` to enable)    |
+| `COUNTRY_PRIORITY`   | `CN,HK,TW,JP,SG,US` | Comma-separated country priority for routing |
 
 **Example wrangler.toml:**
 
@@ -75,6 +76,39 @@ These variables can be set in `wrangler.toml` or Cloudflare Dashboard to customi
 MEM_CACHE_MAX_SIZE = "20000"
 CACHE_TTL_SECONDS = "43200"
 DEBUG = "true"
+COUNTRY_PRIORITY = "CN,HK,TW,JP,SG,US"
+```
+
+## API Endpoints
+
+### DoH Endpoint (RFC 8484)
+
+`GET/POST https://<your-worker-domain>/?dns=<BASE64_DNS_QUERY>`
+
+### JSON DNS API
+
+```bash
+GET https://<your-worker-domain>/resolve?name=example.com&type=A
+```
+
+Returns Google DNS JSON API compatible response.
+
+### Health Check
+
+```bash
+GET https://<your-worker-domain>/health
+```
+
+### Statistics
+
+```bash
+GET https://<your-worker-domain>/stats
+```
+
+### IP Debug
+
+```bash
+GET https://<your-worker-domain>/debug/ip/8.8.8.8
 ```
 
 ## API Reference
