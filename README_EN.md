@@ -39,11 +39,16 @@ Fork this repository to your own GitHub account.
 
 Go to your forked repository's **Settings** > **Secrets and variables** > **Actions**, and add the following **Repository secrets**:
 
-| Secret Name             | Description                                                                                                                                                                                                       |
-| :---------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`  | Your Cloudflare API Token. [Get it here](https://dash.cloudflare.com/profile/api-tokens).<br>**Required Permissions (Custom Token)**:<br>1. `Account` > `Worker Scripts` > `Edit`<br>2. `Account` > `D1` > `Edit` |
-| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare Account ID. Found in the URL of your Cloudflare Dashboard.                                                                                                                                        |
-| `UPSTREAM_ENDPOINT`     | (Optional) Custom primary upstream DoH server (Default: `https://1.1.1.1/dns-query`).                                                                                                                             |
+| Secret Name             | Description                                                                               |
+| :---------------------- | :---------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`  | Your Cloudflare API Token. [Get it here](https://dash.cloudflare.com/profile/api-tokens). |
+| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare Account ID. Found in the URL of your Cloudflare Dashboard.                |
+| `UPSTREAM_ENDPOINT`     | (Optional) Custom primary upstream DoH server (Default: `https://1.1.1.1/dns-query`).     |
+
+> **CLOUDFLARE_API_TOKEN Required Permissions (Custom Token)**:
+>
+> 1. `Account` > `Worker Scripts` > `Edit`
+> 2. `Account` > `D1` > `Edit`
 
 ### 3. Deploy
 
@@ -129,38 +134,6 @@ The DoH endpoint accepts requests in the following format:
 
 ```bash
 curl "https://doh.subdomain.workers.dev/client-ip/223.5.5.5/client-country/CN/alternative-ip/8.8.8.8/dns-query?dns=<BASE64_DNS_QUERY>"
-```
-
-## Architecture
-
-```text
-┌─────────────┐     ┌──────────────────────────────────────────┐
-│   Client    │────▶│           Cloudflare Worker              │
-└─────────────┘     │                                          │
-                    │  ┌────────────────────────────────────┐  │
-                    │  │  Parallel DNS Queries              │  │
-                    │  │  ┌──────────┐    ┌──────────────┐  │  │
-                    │  │  │ Client IP│    │Alternative IP│  │  │
-                    │  │  │   (ECS)  │    │    (ECS)     │  │  │
-                    │  │  └────┬─────┘    └──────┬───────┘  │  │
-                    │  └───────┼─────────────────┼──────────┘  │
-                    │          ▼                 ▼              │
-                    │  ┌───────────────────────────────────┐   │
-                    │  │    Upstream (CF 1.1.1.1 / Google) │   │
-                    │  └───────────────┬───────────────────┘   │
-                    │                  ▼                       │
-                    │  ┌───────────────────────────────────┐   │
-                    │  │   IP → Country Lookup             │   │
-                    │  │   ┌─────┐ ┌─────┐ ┌────┐          │   │
-                    │  │   │ L1  │→│ L2  │→│ D1 │          │   │
-                    │  │   │ Mem │ │Cache│ │ DB │          │   │
-                    │  │   └─────┘ └─────┘ └────┘          │   │
-                    │  └───────────────────────────────────┘   │
-                    │                  ▼                       │
-                    │  ┌───────────────────────────────────┐   │
-                    │  │ Country Match? → Return Best IP   │   │
-                    │  └───────────────────────────────────┘   │
-                    └──────────────────────────────────────────┘
 ```
 
 ## Contributing

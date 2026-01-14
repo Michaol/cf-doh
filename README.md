@@ -39,11 +39,16 @@
 
 进入你 Fork 的仓库的 **Settings** > **Secrets and variables** > **Actions**，添加以下 **Repository secrets**：
 
-| Secret 名称             | 说明                                                                                                                                                                                                 |
-| :---------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`  | 你的 Cloudflare API Token。[在此获取](https://dash.cloudflare.com/profile/api-tokens)。<br>**必需权限 (Custom Token)**：<br>1. `Account` > `Worker Scripts` > `Edit`<br>2. `Account` > `D1` > `Edit` |
-| `CLOUDFLARE_ACCOUNT_ID` | 你的 Cloudflare Account ID。可在 Cloudflare 控制面板的 URL 中找到。                                                                                                                                  |
-| `UPSTREAM_ENDPOINT`     | （可选）自定义主上游 DoH 服务器（默认：`https://1.1.1.1/dns-query`）。                                                                                                                               |
+| Secret 名称             | 说明                                                                                    |
+| :---------------------- | :-------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`  | 你的 Cloudflare API Token。[在此获取](https://dash.cloudflare.com/profile/api-tokens)。 |
+| `CLOUDFLARE_ACCOUNT_ID` | 你的 Cloudflare Account ID。可在 Cloudflare 控制面板的 URL 中找到。                     |
+| `UPSTREAM_ENDPOINT`     | （可选）自定义主上游 DoH 服务器（默认：`https://1.1.1.1/dns-query`）。                  |
+
+> **CLOUDFLARE_API_TOKEN 必需权限 (Custom Token)**:
+>
+> 1. `Account` > `Worker Scripts` > `Edit`
+> 2. `Account` > `D1` > `Edit`
 
 ### 3. 部署
 
@@ -129,38 +134,6 @@ DoH 端点接受以下格式的请求：
 
 ```bash
 curl "https://doh.subdomain.workers.dev/client-ip/223.5.5.5/client-country/CN/alternative-ip/8.8.8.8/dns-query?dns=<BASE64_DNS_QUERY>"
-```
-
-## 架构
-
-```text
-┌─────────────┐     ┌──────────────────────────────────────────┐
-│   客户端    │────▶│           Cloudflare Worker              │
-└─────────────┘     │                                          │
-                    │  ┌────────────────────────────────────┐  │
-                    │  │  并行 DNS 查询                      │  │
-                    │  │  ┌──────────┐    ┌──────────────┐  │  │
-                    │  │  │ 客户端IP │    │   备用 IP    │  │  │
-                    │  │  │   (ECS)  │    │    (ECS)     │  │  │
-                    │  │  └────┬─────┘    └──────┬───────┘  │  │
-                    │  └───────┼─────────────────┼──────────┘  │
-                    │          ▼                 ▼              │
-                    │  ┌───────────────────────────────────┐   │
-                    │  │   上游 (CF 1.1.1.1 / Google)      │   │
-                    │  └───────────────┬───────────────────┘   │
-                    │                  ▼                       │
-                    │  ┌───────────────────────────────────┐   │
-                    │  │   IP → 国家查询                    │   │
-                    │  │   ┌─────┐ ┌─────┐ ┌────┐          │   │
-                    │  │   │ L1  │→│ L2  │→│ D1 │          │   │
-                    │  │   │内存 │ │缓存 │ │数据库│         │   │
-                    │  │   └─────┘ └─────┘ └────┘          │   │
-                    │  └───────────────────────────────────┘   │
-                    │                  ▼                       │
-                    │  ┌───────────────────────────────────┐   │
-                    │  │ 国家匹配？→ 返回最佳 IP           │   │
-                    │  └───────────────────────────────────┘   │
-                    └──────────────────────────────────────────┘
 ```
 
 ## 贡献
