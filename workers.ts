@@ -520,66 +520,91 @@ async function parseDnsQuery(request: Request, url: URL): Promise<Uint8Array | R
 // DNS Query with Upstream Failover
 // ============================================================
 
-async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: ExecutionContext): Promise<Response> {
-	// Generate cache key based on query + ECS prefix
-	const cacheKey = generateDnsCacheKey(queryData, clientIp);
-	
-	// Check L1 Memory Cache
+/**
+ * Check L1 memory cache and handle prefetching.
+ */
+function checkL1Cache(
+	cacheKey: string,
+	queryData: Uint8Array,
+	clientIp: string | null,
+	ctx?: ExecutionContext
+): Response | null {
 	const cachedEntry = DNS_CACHE.get(cacheKey);
-	if (cachedEntry && cachedEntry.expires > Date.now()) {
-		STATS.dns.cacheHits++;
-		log(`DNS Cache HIT (memory): ${cacheKey}`);
-		
-		// Check if we need to prefetch (remaining TTL < threshold)
+	if (!cachedEntry || cachedEntry.expires <= Date.now()) {
+		return null;
+	}
+	
+	STATS.dns.cacheHits++;
+	log(`DNS Cache HIT (memory): ${cacheKey}`);
+	
+	// Check if we need to prefetch (remaining TTL < threshold)
+	if (ctx) {
 		const remainingMs = cachedEntry.expires - Date.now();
 		const totalTtlMs = (cachedEntry.ttl || 300) * 1000;
 		const remainingRatio = remainingMs / totalTtlMs;
 		
-		if (ctx && remainingRatio < DNS_CACHE_CONFIG.prefetchThreshold) {
-			// Trigger background prefetch
+		if (remainingRatio < DNS_CACHE_CONFIG.prefetchThreshold) {
 			STATS.dns.prefetches++;
 			log(`DNS Prefetch triggered: ${cacheKey}, remaining: ${Math.round(remainingRatio * 100)}%`);
 			ctx.waitUntil(prefetchDns(queryData, clientIp, cacheKey));
 		}
-		
-		return new Response(cachedEntry.data, {
-			headers: { 'Content-Type': 'application/dns-message' },
-		});
 	}
+	
+	return new Response(cachedEntry.data, {
+		headers: { 'Content-Type': 'application/dns-message' },
+	});
+}
 
-	// Check L2 Cache API
+/**
+ * Check L2 Cache API and optionally warm up L1.
+ */
+async function checkL2Cache(cacheKey: string, cacheUrl: Request): Promise<Response | null> {
 	const cache = caches.default;
-	const cacheUrl = new Request(`https://dns-cache.internal/${cacheKey}`);
 	const cachedResponse = await cache.match(cacheUrl);
-	if (cachedResponse) {
-		STATS.dns.cacheHits++;
-		log(`DNS Cache HIT (cache api): ${cacheKey}`);
-		// Warm up L1 cache
-		const buffer = await cachedResponse.clone().arrayBuffer();
-		
-		// Use remaining TTL from X-Expires-At, fall back to 60s
-		let ttl = 60;
-		const expiresAtStr = cachedResponse.headers.get('X-Expires-At');
-		if (expiresAtStr) {
-			const expiresAt = Number.parseInt(expiresAtStr, 10);
-			if (!Number.isNaN(expiresAt)) {
-				ttl = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
-			}
+	if (!cachedResponse) {
+		return null;
+	}
+	
+	STATS.dns.cacheHits++;
+	log(`DNS Cache HIT (cache api): ${cacheKey}`);
+	
+	const buffer = await cachedResponse.clone().arrayBuffer();
+	
+	// Use remaining TTL from X-Expires-At, fall back to 60s
+	let ttl = 60;
+	const expiresAtStr = cachedResponse.headers.get('X-Expires-At');
+	if (expiresAtStr) {
+		const expiresAt = Number.parseInt(expiresAtStr, 10);
+		if (!Number.isNaN(expiresAt)) {
+			ttl = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
 		}
-		
-		// Skip L1 cache if already expired
-		if (ttl <= 0) {
-			log(`Skipping L1 cache: TTL expired (${cacheKey})`);
-			return new Response(buffer, {
-				headers: { 'Content-Type': 'application/dns-message' },
-			});
-		}
-		
-		updateDnsCache(cacheKey, buffer, ttl);
+	}
+	
+	// Skip L1 cache if already expired
+	if (ttl <= 0) {
+		log(`Skipping L1 cache: TTL expired (${cacheKey})`);
 		return new Response(buffer, {
 			headers: { 'Content-Type': 'application/dns-message' },
 		});
 	}
+	
+	updateDnsCache(cacheKey, buffer, ttl);
+	return new Response(buffer, {
+		headers: { 'Content-Type': 'application/dns-message' },
+	});
+}
+
+async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: ExecutionContext): Promise<Response> {
+	const cacheKey = generateDnsCacheKey(queryData, clientIp);
+	
+	// Check L1 Memory Cache
+	const l1Result = checkL1Cache(cacheKey, queryData, clientIp, ctx);
+	if (l1Result) return l1Result;
+
+	// Check L2 Cache API
+	const cacheUrl = new Request(`https://dns-cache.internal/${cacheKey}`);
+	const l2Result = await checkL2Cache(cacheKey, cacheUrl);
+	if (l2Result) return l2Result;
 
 	STATS.dns.cacheMisses++;
 
@@ -610,6 +635,7 @@ async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: Ex
 	updateDnsCache(cacheKey, buffer, ttl);
 
 	// Update L2 cache (async)
+	const cache = caches.default;
 	const cacheResponse = new Response(buffer, {
 		headers: {
 			'Content-Type': 'application/dns-message',
@@ -617,7 +643,6 @@ async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: Ex
 			'X-Expires-At': `${Date.now() + ttl * 1000}`,
 		},
 	});
-	// Don't await, let it run in background
 	cache.put(cacheUrl, cacheResponse).catch((err) => {
 		STATS.errors++;
 		log(`Cache put failed: ${err.message || err}`);

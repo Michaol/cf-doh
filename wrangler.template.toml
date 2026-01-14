@@ -6,7 +6,8 @@ workers_dev = true
 preview_urls = false
 
 [[d1_databases]]
-binding = "DB"
-database_name = "geolite2-country"
-database_id = "placeholder-will-be-replaced"
-migrations_dir = "migrations"
+binding = "geolite2_country"
+database_name = ""
+database_id = ""
+#[placement]
+#mode = "smart"
