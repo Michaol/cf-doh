@@ -1,0 +1,416 @@
+deploy	Set up job	﻿2026-01-14T14:37:44.3304482Z Current runner version: '2.330.0'
+deploy	Set up job	2026-01-14T14:37:44.3332577Z ##[group]Runner Image Provisioner
+deploy	Set up job	2026-01-14T14:37:44.3333671Z Hosted Compute Agent
+deploy	Set up job	2026-01-14T14:37:44.3334450Z Version: 20251211.462
+deploy	Set up job	2026-01-14T14:37:44.3335121Z Commit: 6cbad8c2bb55d58165063d031ccabf57e2d2db61
+deploy	Set up job	2026-01-14T14:37:44.3335989Z Build Date: 2025-12-11T16:28:49Z
+deploy	Set up job	2026-01-14T14:37:44.3336675Z Worker ID: {012c80f4-c0fe-4df9-be53-819cd2329938}
+deploy	Set up job	2026-01-14T14:37:44.3337430Z ##[endgroup]
+deploy	Set up job	2026-01-14T14:37:44.3338055Z ##[group]Operating System
+deploy	Set up job	2026-01-14T14:37:44.3338631Z Ubuntu
+deploy	Set up job	2026-01-14T14:37:44.3339121Z 24.04.3
+deploy	Set up job	2026-01-14T14:37:44.3339692Z LTS
+deploy	Set up job	2026-01-14T14:37:44.3340163Z ##[endgroup]
+deploy	Set up job	2026-01-14T14:37:44.3340725Z ##[group]Runner Image
+deploy	Set up job	2026-01-14T14:37:44.3341395Z Image: ubuntu-24.04
+deploy	Set up job	2026-01-14T14:37:44.3341918Z Version: 20260105.202.1
+deploy	Set up job	2026-01-14T14:37:44.3343036Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260105.202/images/ubuntu/Ubuntu2404-Readme.md
+deploy	Set up job	2026-01-14T14:37:44.3344822Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260105.202
+deploy	Set up job	2026-01-14T14:37:44.3346192Z ##[endgroup]
+deploy	Set up job	2026-01-14T14:37:44.3347323Z ##[group]GITHUB_TOKEN Permissions
+deploy	Set up job	2026-01-14T14:37:44.3349627Z Contents: write
+deploy	Set up job	2026-01-14T14:37:44.3350426Z Metadata: read
+deploy	Set up job	2026-01-14T14:37:44.3351011Z ##[endgroup]
+deploy	Set up job	2026-01-14T14:37:44.3353304Z Secret source: Actions
+deploy	Set up job	2026-01-14T14:37:44.3354649Z Prepare workflow directory
+deploy	Set up job	2026-01-14T14:37:44.3746172Z Prepare all required actions
+deploy	Set up job	2026-01-14T14:37:44.3809421Z Getting action download info
+deploy	Set up job	2026-01-14T14:37:44.8926242Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+deploy	Set up job	2026-01-14T14:37:44.9965878Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+deploy	Set up job	2026-01-14T14:37:45.1854647Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+deploy	Set up job	2026-01-14T14:37:45.3126522Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+deploy	Set up job	2026-01-14T14:37:45.5394854Z Complete job name: deploy
+deploy	Run actions/checkout@v4	﻿2026-01-14T14:37:45.6214954Z ##[group]Run actions/checkout@v4
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6216016Z with:
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6216473Z   repository: Michaol/cf-doh
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6217280Z   token: ***
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6217709Z   ssh-strict: true
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6218150Z   ssh-user: git
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6218595Z   persist-credentials: true
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6219100Z   clean: true
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6219544Z   sparse-checkout-cone-mode: true
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6220075Z   fetch-depth: 1
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6220500Z   fetch-tags: false
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6220956Z   show-progress: true
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6221409Z   lfs: false
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6221844Z   submodules: false
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6222301Z   set-safe-directory: true
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.6223036Z ##[endgroup]
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7363457Z Syncing repository: Michaol/cf-doh
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7366215Z ##[group]Getting Git version info
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7367269Z Working directory is '/home/runner/work/cf-doh/cf-doh'
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7368488Z [command]/usr/bin/git version
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7455590Z git version 2.52.0
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7483773Z ##[endgroup]
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7499961Z Temporarily overriding HOME='/home/runner/work/_temp/1448cf9c-ecc8-4e0a-a986-aad34ecb3595' before making global git config changes
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7502041Z Adding repository directory to the temporary git global config as a safe directory
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7513814Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/cf-doh/cf-doh
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7566607Z Deleting the contents of '/home/runner/work/cf-doh/cf-doh'
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7570839Z ##[group]Initializing the repository
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7575346Z [command]/usr/bin/git init /home/runner/work/cf-doh/cf-doh
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7693301Z hint: Using 'master' as the name for the initial branch. This default branch name
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7695822Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7697916Z hint: to use in all of your new repositories, which will suppress this warning,
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7698905Z hint: call:
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7699321Z hint:
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7699881Z hint: 	git config --global init.defaultBranch <name>
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7700551Z hint:
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7701164Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7702224Z hint: 'development'. The just-created branch can be renamed via this command:
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7703330Z hint:
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7703953Z hint: 	git branch -m <name>
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7704829Z hint:
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7705616Z hint: Disable this message with "git config set advice.defaultBranchName false"
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7706702Z Initialized empty Git repository in /home/runner/work/cf-doh/cf-doh/.git/
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7710065Z [command]/usr/bin/git remote add origin https://github.com/Michaol/cf-doh
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7750742Z ##[endgroup]
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7751706Z ##[group]Disabling automatic garbage collection
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7755314Z [command]/usr/bin/git config --local gc.auto 0
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7788390Z ##[endgroup]
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7789229Z ##[group]Setting up auth
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7796324Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.7832429Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.8187305Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.8224352Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.8459675Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.8495417Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.8741989Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.8780834Z ##[endgroup]
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.8789593Z ##[group]Fetching the repository
+deploy	Run actions/checkout@v4	2026-01-14T14:37:45.8791453Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +02abfd06f3eeeb50203900c736ae1c7ab9027077:refs/remotes/origin/main
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3255234Z From https://github.com/Michaol/cf-doh
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3256777Z  * [new ref]         02abfd06f3eeeb50203900c736ae1c7ab9027077 -> origin/main
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3291768Z ##[endgroup]
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3293443Z ##[group]Determining the checkout info
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3295283Z ##[endgroup]
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3299212Z [command]/usr/bin/git sparse-checkout disable
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3348008Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3387715Z ##[group]Checking out the ref
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3392086Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3489531Z Switched to a new branch 'main'
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3491379Z branch 'main' set up to track 'origin/main'.
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3499520Z ##[endgroup]
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3541010Z [command]/usr/bin/git log -1 --format=%H
+deploy	Run actions/checkout@v4	2026-01-14T14:37:46.3567379Z 02abfd06f3eeeb50203900c736ae1c7ab9027077
+deploy	Run actions/setup-node@v4	﻿2026-01-14T14:37:46.3933848Z ##[group]Run actions/setup-node@v4
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:46.3935304Z with:
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:46.3936138Z   node-version: 20
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:46.3937084Z   always-auth: false
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:46.3938046Z   check-latest: false
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:46.3939380Z   token: ***
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:46.3940237Z ##[endgroup]
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:46.6078372Z Found in cache @ /opt/hostedtoolcache/node/20.19.6/x64
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:46.6080857Z ##[group]Environment details
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:49.2843013Z node: v20.19.6
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:49.2843517Z npm: 10.8.2
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:49.2843832Z yarn: 1.22.22
+deploy	Run actions/setup-node@v4	2026-01-14T14:37:49.2846578Z ##[endgroup]
+deploy	Run actions/setup-python@v5	﻿2026-01-14T14:37:49.2997136Z ##[group]Run actions/setup-python@v5
+deploy	Run actions/setup-python@v5	2026-01-14T14:37:49.2997485Z with:
+deploy	Run actions/setup-python@v5	2026-01-14T14:37:49.2997690Z   python-version: 3.11
+deploy	Run actions/setup-python@v5	2026-01-14T14:37:49.2997999Z   check-latest: false
+deploy	Run actions/setup-python@v5	2026-01-14T14:37:49.2998570Z   token: ***
+deploy	Run actions/setup-python@v5	2026-01-14T14:37:49.2998917Z   update-environment: true
+deploy	Run actions/setup-python@v5	2026-01-14T14:37:49.2999354Z   allow-prereleases: false
+deploy	Run actions/setup-python@v5	2026-01-14T14:37:49.2999726Z   freethreaded: false
+deploy	Run actions/setup-python@v5	2026-01-14T14:37:49.3000075Z ##[endgroup]
+deploy	Run actions/setup-python@v5	2026-01-14T14:37:49.4772923Z ##[group]Installed versions
+deploy	Run actions/setup-python@v5	2026-01-14T14:37:49.5463268Z Successfully set up CPython (3.11.14)
+deploy	Run actions/setup-python@v5	2026-01-14T14:37:49.5464461Z ##[endgroup]
+deploy	Cache npm dependencies	﻿2026-01-14T14:37:49.6119442Z ##[group]Run actions/cache@v4
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6119814Z with:
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6120040Z   path: ~/.npm
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6120283Z   key: Linux-npm-
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6120573Z   restore-keys: Linux-npm-
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6120870Z   enableCrossOsArchive: false
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6121195Z   fail-on-cache-miss: false
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6121480Z   lookup-only: false
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6121725Z   save-always: false
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6121970Z env:
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6122278Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6122855Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6123412Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6123865Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6124546Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6124967Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+deploy	Cache npm dependencies	2026-01-14T14:37:49.6125387Z ##[endgroup]
+deploy	Cache npm dependencies	2026-01-14T14:37:50.0656044Z Cache not found for input keys: Linux-npm-, Linux-npm-
+deploy	Cache pip dependencies	﻿2026-01-14T14:37:50.0755190Z ##[group]Run actions/cache@v4
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0755637Z with:
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0755885Z   path: ~/.cache/pip
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0756104Z   key: Linux-pip-maxminddb
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0756342Z   restore-keys: Linux-pip-
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0756570Z   enableCrossOsArchive: false
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0756798Z   fail-on-cache-miss: false
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0757019Z   lookup-only: false
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0757214Z   save-always: false
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0757386Z env:
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0757623Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0758036Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0758435Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0758796Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0759170Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0759538Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+deploy	Cache pip dependencies	2026-01-14T14:37:50.0759886Z ##[endgroup]
+deploy	Cache pip dependencies	2026-01-14T14:37:50.5050917Z Cache not found for input keys: Linux-pip-maxminddb, Linux-pip-
+deploy	Install dependencies	﻿2026-01-14T14:37:50.5158143Z ##[group]Run npm install
+deploy	Install dependencies	2026-01-14T14:37:50.5158471Z [36;1mnpm install[0m
+deploy	Install dependencies	2026-01-14T14:37:50.5158689Z [36;1mpip install maxminddb[0m
+deploy	Install dependencies	2026-01-14T14:37:50.5251609Z shell: /usr/bin/bash -e {0}
+deploy	Install dependencies	2026-01-14T14:37:50.5251967Z env:
+deploy	Install dependencies	2026-01-14T14:37:50.5252262Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Install dependencies	2026-01-14T14:37:50.5252751Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+deploy	Install dependencies	2026-01-14T14:37:50.5253232Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Install dependencies	2026-01-14T14:37:50.5253659Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Install dependencies	2026-01-14T14:37:50.5254077Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Install dependencies	2026-01-14T14:37:50.5254921Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+deploy	Install dependencies	2026-01-14T14:37:50.5255272Z ##[endgroup]
+deploy	Install dependencies	2026-01-14T14:37:58.0207087Z 
+deploy	Install dependencies	2026-01-14T14:37:58.0208019Z added 44 packages, and audited 45 packages in 7s
+deploy	Install dependencies	2026-01-14T14:37:58.0208917Z 
+deploy	Install dependencies	2026-01-14T14:37:58.0209170Z 9 packages are looking for funding
+deploy	Install dependencies	2026-01-14T14:37:58.0209594Z   run `npm fund` for details
+deploy	Install dependencies	2026-01-14T14:37:58.0220300Z 
+deploy	Install dependencies	2026-01-14T14:37:58.0220547Z found 0 vulnerabilities
+deploy	Install dependencies	2026-01-14T14:38:01.4855760Z Collecting maxminddb
+deploy	Install dependencies	2026-01-14T14:38:01.5460854Z   Downloading maxminddb-3.0.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (5.4 kB)
+deploy	Install dependencies	2026-01-14T14:38:01.5587212Z Downloading maxminddb-3.0.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (97 kB)
+deploy	Install dependencies	2026-01-14T14:38:01.6354507Z Installing collected packages: maxminddb
+deploy	Install dependencies	2026-01-14T14:38:01.6497727Z Successfully installed maxminddb-3.0.0
+deploy	Import GeoIP data and deploy	﻿2026-01-14T14:38:01.8448227Z ##[group]Run ./import-geoip.sh
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8448585Z [36;1m./import-geoip.sh[0m
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8482923Z shell: /usr/bin/bash -e {0}
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8483200Z env:
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8483492Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8484025Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8484802Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8485246Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8485696Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8486144Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8486736Z   CLOUDFLARE_ACCOUNT_ID: ***
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8487154Z   CLOUDFLARE_API_TOKEN: ***
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8487413Z   WORKERS_DEV: true
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8487630Z ##[endgroup]
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:01.8594502Z Downloading Country.mmdb from Loyalsoldier...
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:02.0846531Z Database version: 20260114
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:02.0847277Z Extracting data from MMDB...
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:33.1163276Z Opening Country.mmdb...
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:33.1164624Z Extracted 572930 IPv4 records, 551537 IPv6 records
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:33.1165319Z Writing blocks_ipv4.csv...
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:33.1165812Z Writing blocks_ipv6.csv...
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:33.1166226Z Done!
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:33.1305529Z Creating SQLite database...
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:34.9004620Z IPv4 records: 572930
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:34.9110208Z IPv6 records: 551537
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:34.9110909Z Exporting SQL dump...
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:41.2546932Z Creating D1 database: geoip_20260114_weur
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:42.8376450Z 
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:42.8377319Z  ⛅️ wrangler 4.59.1
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:42.8377853Z ───────────────────
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:43.7013815Z 
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:43.7449916Z [31m✘ [41;31m[[41;97mERROR[41;31m][0m [1mA database with that name already exists[0m
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:43.7450486Z 
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:43.7450497Z 
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:43.7734349Z 🪵  Logs were written to "/home/runner/.config/.wrangler/logs/wrangler-2026-01-14_14-38-42_328.log"
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:44.7880427Z 
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:44.7881226Z  ⛅️ wrangler 4.59.1
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:44.7881884Z ───────────────────
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:44.7885314Z Resource location: remote 
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:44.7885847Z 
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:44.8415382Z [33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1m⚠️ This process may take some time, during which your D1 database will be unavailable to serve queries.[0m
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:44.8416112Z 
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:44.8416121Z 
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:44.9861177Z 🌀 Executing on remote database geoip_20260114_weur (3b600a8b-cb2e-4fa7-b4ce-a5ef837ded61):
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:44.9863114Z 🌀 To execute on your local development database, remove the --remote flag from your wrangler command.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:45.2382602Z Note: if the execution fails to complete, your DB will return to its original state and you can safely retry.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:45.2386481Z ├ Checking if file needs uploading
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:47.7073005Z │
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:47.7073759Z 🌀 File already uploaded. Processing.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:47.7075075Z 🌀 Starting import...
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:47.7077220Z 🌀 Processed 58288 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:49.8037356Z 🌀 Processed 116105 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:49.8038707Z 🌀 Processed 172971 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:49.8039422Z 🌀 Processed 230006 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:49.8040118Z 🌀 Processed 286525 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:49.8040810Z 🌀 Processed 342841 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:51.3761747Z 🌀 Processed 399107 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:51.3762507Z 🌀 Processed 455538 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:51.3763139Z 🌀 Processed 512155 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:52.6089129Z 🌀 Processed 568427 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:52.6089696Z 🌀 Processed 610177 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:52.6090147Z 🌀 Processed 650394 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:54.8149532Z 🌀 Processed 691745 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:54.8151503Z 🌀 Processed 731576 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:54.8152140Z 🌀 Processed 771279 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:54.8153220Z 🌀 Processed 811145 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:54.8153754Z 🌀 Processed 851484 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:54.8154519Z 🌀 Processed 891313 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3836437Z 🌀 Processed 932593 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3837291Z 🌀 Processed 972523 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3837748Z 🌀 Processed 1012510 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3838376Z 🌀 Processed 1051549 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3838898Z 🌀 Processed 1092461 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3839457Z 🌀 Processed 1124473 queries.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3840517Z 🚣 Executed 1124473 queries in 10401.84ms (26 rows read, 2248942 rows written)
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3841603Z    Database is currently at bookmark 00000020-000008b2-00004ff3-f13f9a39935a0207b1062dbb4b782d89.
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3842455Z [
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3842738Z   {
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3843051Z     "results": [
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3843393Z       {
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3843787Z         "Total queries executed": 1124473,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3844569Z         "Rows read": 26,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3845053Z         "Rows written": 2248942,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3845552Z         "Database size (MB)": "89.78"
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3845991Z       }
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3846273Z     ],
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3846562Z     "success": true,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3847219Z     "finalBookmark": "00000020-000008b2-00004ff3-f13f9a39935a0207b1062dbb4b782d89",
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3847909Z     "meta": {
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3848233Z       "served_by": "v3-prod",
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3848667Z       "served_by_region": "WEUR",
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3849113Z       "served_by_colo": "LHR",
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3849551Z       "served_by_primary": true,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3849927Z       "timings": {
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3850335Z         "sql_duration_ms": 10401.8394
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3850766Z       },
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3851074Z       "duration": 10401.8394,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3851463Z       "changes": 1124469,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3874019Z       "last_row_id": 551537,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3874707Z       "changed_db": true,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3875136Z       "size_after": 89776128,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3875524Z       "rows_read": 26,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3875931Z       "rows_written": 2248942,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3876330Z       "num_tables": 2,
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3876693Z       "total_attempts": 1
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3877072Z     }
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3877350Z   }
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:56.3877638Z ]
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:58.5720048Z Enabling read replication...
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:59.0629407Z Generating wrangler.toml...
+deploy	Import GeoIP data and deploy	2026-01-14T14:38:59.0649056Z Cleaning up old databases...
+deploy	Import GeoIP data and deploy	2026-01-14T14:39:00.2770173Z Import complete!
+deploy	Move wrangler config	﻿2026-01-14T14:39:00.2805525Z ##[group]Run mv tmp/wrangler.toml .
+deploy	Move wrangler config	2026-01-14T14:39:00.2805905Z [36;1mmv tmp/wrangler.toml .[0m
+deploy	Move wrangler config	2026-01-14T14:39:00.2839912Z shell: /usr/bin/bash -e {0}
+deploy	Move wrangler config	2026-01-14T14:39:00.2840211Z env:
+deploy	Move wrangler config	2026-01-14T14:39:00.2840513Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Move wrangler config	2026-01-14T14:39:00.2841024Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+deploy	Move wrangler config	2026-01-14T14:39:00.2841557Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Move wrangler config	2026-01-14T14:39:00.2842000Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Move wrangler config	2026-01-14T14:39:00.2842433Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Move wrangler config	2026-01-14T14:39:00.2843120Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+deploy	Move wrangler config	2026-01-14T14:39:00.2843493Z ##[endgroup]
+deploy	Deploy Worker	﻿2026-01-14T14:39:00.2947041Z ##[group]Run npm run deploy
+deploy	Deploy Worker	2026-01-14T14:39:00.2947334Z [36;1mnpm run deploy[0m
+deploy	Deploy Worker	2026-01-14T14:39:00.2980895Z shell: /usr/bin/bash -e {0}
+deploy	Deploy Worker	2026-01-14T14:39:00.2981146Z env:
+deploy	Deploy Worker	2026-01-14T14:39:00.2981408Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Deploy Worker	2026-01-14T14:39:00.2981856Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+deploy	Deploy Worker	2026-01-14T14:39:00.2982282Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Deploy Worker	2026-01-14T14:39:00.2982680Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Deploy Worker	2026-01-14T14:39:00.2983099Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Deploy Worker	2026-01-14T14:39:00.2983512Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+deploy	Deploy Worker	2026-01-14T14:39:00.2984403Z   CLOUDFLARE_ACCOUNT_ID: ***
+deploy	Deploy Worker	2026-01-14T14:39:00.2984784Z   CLOUDFLARE_API_TOKEN: ***
+deploy	Deploy Worker	2026-01-14T14:39:00.2985039Z ##[endgroup]
+deploy	Deploy Worker	2026-01-14T14:39:00.4124702Z 
+deploy	Deploy Worker	2026-01-14T14:39:00.4125264Z > doh@0.0.0 deploy
+deploy	Deploy Worker	2026-01-14T14:39:00.4125751Z > wrangler deploy
+deploy	Deploy Worker	2026-01-14T14:39:00.4126286Z 
+deploy	Deploy Worker	2026-01-14T14:39:01.1290873Z 
+deploy	Deploy Worker	2026-01-14T14:39:01.1292182Z Cloudflare collects anonymous telemetry about your usage of Wrangler. Learn more at https://github.com/cloudflare/workers-sdk/tree/main/packages/wrangler/telemetry.md
+deploy	Deploy Worker	2026-01-14T14:39:01.1776577Z 
+deploy	Deploy Worker	2026-01-14T14:39:01.1777393Z  ⛅️ wrangler 4.59.1
+deploy	Deploy Worker	2026-01-14T14:39:01.1777739Z ───────────────────
+deploy	Deploy Worker	2026-01-14T14:39:01.9091486Z Total Upload: 26.17 KiB / gzip: 6.73 KiB
+deploy	Deploy Worker	2026-01-14T14:39:05.7562204Z Your Worker has access to the following bindings:
+deploy	Deploy Worker	2026-01-14T14:39:05.7563134Z Binding                                         Resource         
+deploy	Deploy Worker	2026-01-14T14:39:05.7564059Z env.geolite2_country (geoip_20260114_weur)      D1 Database      
+deploy	Deploy Worker	2026-01-14T14:39:05.7564803Z 
+deploy	Deploy Worker	2026-01-14T14:39:05.7575948Z Uploaded doh (4.00 sec)
+deploy	Deploy Worker	2026-01-14T14:39:16.0991992Z Deployed doh triggers (10.34 sec)
+deploy	Deploy Worker	2026-01-14T14:39:16.0992777Z   https://doh.michaol.workers.dev
+deploy	Deploy Worker	2026-01-14T14:39:16.0993978Z Current Version ID: 3972fb17-fccd-4427-acc1-6cb36d296286
+deploy	Update release branch	﻿2026-01-14T14:39:16.1725300Z ##[group]Run mkdir release && cd release
+deploy	Update release branch	2026-01-14T14:39:16.1725712Z [36;1mmkdir release && cd release[0m
+deploy	Update release branch	2026-01-14T14:39:16.1725997Z [36;1mDATE=$(date)[0m
+deploy	Update release branch	2026-01-14T14:39:16.1726236Z [36;1mecho "$DATE" > release[0m
+deploy	Update release branch	2026-01-14T14:39:16.1726496Z [36;1mgit init[0m
+deploy	Update release branch	2026-01-14T14:39:16.1726796Z [36;1mgit config --local user.name "github-actions[bot]"[0m
+deploy	Update release branch	2026-01-14T14:39:16.1727388Z [36;1mgit config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"[0m
+deploy	Update release branch	2026-01-14T14:39:16.1727919Z [36;1mgit checkout -b release[0m
+deploy	Update release branch	2026-01-14T14:39:16.1728188Z [36;1mgit add -A[0m
+deploy	Update release branch	2026-01-14T14:39:16.1728422Z [36;1mgit commit -m "$DATE"[0m
+deploy	Update release branch	2026-01-14T14:39:16.1729251Z [36;1mgit remote add origin "***github.com/Michaol/cf-doh"[0m
+deploy	Update release branch	2026-01-14T14:39:16.1729658Z [36;1mgit push -f -u origin release[0m
+deploy	Update release branch	2026-01-14T14:39:16.1762785Z shell: /usr/bin/bash -e {0}
+deploy	Update release branch	2026-01-14T14:39:16.1763055Z env:
+deploy	Update release branch	2026-01-14T14:39:16.1763341Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Update release branch	2026-01-14T14:39:16.1763880Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+deploy	Update release branch	2026-01-14T14:39:16.1764495Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Update release branch	2026-01-14T14:39:16.1764937Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Update release branch	2026-01-14T14:39:16.1765380Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+deploy	Update release branch	2026-01-14T14:39:16.1765814Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+deploy	Update release branch	2026-01-14T14:39:16.1766178Z ##[endgroup]
+deploy	Update release branch	2026-01-14T14:39:16.1875332Z hint: Using 'master' as the name for the initial branch. This default branch name
+deploy	Update release branch	2026-01-14T14:39:16.1876561Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+deploy	Update release branch	2026-01-14T14:39:16.1877830Z hint: to use in all of your new repositories, which will suppress this warning,
+deploy	Update release branch	2026-01-14T14:39:16.1878868Z hint: call:
+deploy	Update release branch	2026-01-14T14:39:16.1879179Z hint:
+deploy	Update release branch	2026-01-14T14:39:16.1879691Z hint: 	git config --global init.defaultBranch <name>
+deploy	Update release branch	2026-01-14T14:39:16.1880112Z hint:
+deploy	Update release branch	2026-01-14T14:39:16.1880554Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+deploy	Update release branch	2026-01-14T14:39:16.1881468Z hint: 'development'. The just-created branch can be renamed via this command:
+deploy	Update release branch	2026-01-14T14:39:16.1882165Z hint:
+deploy	Update release branch	2026-01-14T14:39:16.1882511Z hint: 	git branch -m <name>
+deploy	Update release branch	2026-01-14T14:39:16.1882767Z hint:
+deploy	Update release branch	2026-01-14T14:39:16.1883222Z hint: Disable this message with "git config set advice.defaultBranchName false"
+deploy	Update release branch	2026-01-14T14:39:16.1883977Z Initialized empty Git repository in /home/runner/work/cf-doh/cf-doh/release/.git/
+deploy	Update release branch	2026-01-14T14:39:16.1924967Z Switched to a new branch 'release'
+deploy	Update release branch	2026-01-14T14:39:16.1988926Z [release (root-commit) e4dc2cc] Wed Jan 14 14:39:16 UTC 2026
+deploy	Update release branch	2026-01-14T14:39:16.1989733Z  1 file changed, 1 insertion(+)
+deploy	Update release branch	2026-01-14T14:39:16.1990228Z  create mode 100644 release
+deploy	Update release branch	2026-01-14T14:39:17.0457232Z remote: 
+deploy	Update release branch	2026-01-14T14:39:17.0458600Z remote: Create a pull request for 'release' on GitHub by visiting:        
+deploy	Update release branch	2026-01-14T14:39:17.0460144Z remote:      https://github.com/Michaol/cf-doh/pull/new/release        
+deploy	Update release branch	2026-01-14T14:39:17.0461134Z remote: 
+deploy	Update release branch	2026-01-14T14:39:17.0465165Z To https://github.com/Michaol/cf-doh
+deploy	Update release branch	2026-01-14T14:39:17.0465950Z  * [new branch]      release -> release
+deploy	Update release branch	2026-01-14T14:39:17.0515667Z branch 'release' set up to track 'origin/release'.
+deploy	Post Cache pip dependencies	﻿2026-01-14T14:39:17.0570809Z Post job cleanup.
+deploy	Post Cache pip dependencies	2026-01-14T14:39:17.2071315Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/cf-doh/cf-doh --files-from manifest.txt --use-compress-program zstdmt
+deploy	Post Cache pip dependencies	2026-01-14T14:39:18.2136208Z Sent 219093 of 219093 (100.0%), 0.4 MBs/sec
+deploy	Post Cache pip dependencies	2026-01-14T14:39:18.3559700Z Cache saved with key: Linux-pip-maxminddb
+deploy	Post Cache npm dependencies	﻿2026-01-14T14:39:18.4187829Z Post job cleanup.
+deploy	Post Cache npm dependencies	2026-01-14T14:39:18.5725071Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/cf-doh/cf-doh --files-from manifest.txt --use-compress-program zstdmt
+deploy	Post Cache npm dependencies	2026-01-14T14:39:20.0495619Z Sent 15597568 of 70326213 (22.2%), 14.9 MBs/sec
+deploy	Post Cache npm dependencies	2026-01-14T14:39:21.0504511Z Sent 61145088 of 70326213 (86.9%), 29.1 MBs/sec
+deploy	Post Cache npm dependencies	2026-01-14T14:39:21.4822256Z Sent 70326213 of 70326213 (100.0%), 27.6 MBs/sec
+deploy	Post Cache npm dependencies	2026-01-14T14:39:21.6723294Z Cache saved with key: Linux-npm-
+deploy	Post Run actions/setup-python@v5	﻿2026-01-14T14:39:21.6856093Z Post job cleanup.
+deploy	Post Run actions/setup-node@v4	﻿2026-01-14T14:39:21.8538225Z Post job cleanup.
+deploy	Post Run actions/checkout@v4	﻿2026-01-14T14:39:22.0271259Z Post job cleanup.
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1242724Z [command]/usr/bin/git version
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1282509Z git version 2.52.0
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1331675Z Temporarily overriding HOME='/home/runner/work/_temp/946189be-2686-48e6-b7e8-0c7a280beaf0' before making global git config changes
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1333315Z Adding repository directory to the temporary git global config as a safe directory
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1338892Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/cf-doh/cf-doh
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1383292Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1421001Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1665478Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1689654Z http.https://github.com/.extraheader
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1703662Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1737374Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.1974546Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+deploy	Post Run actions/checkout@v4	2026-01-14T14:39:22.2010362Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+deploy	Complete job	﻿2026-01-14T14:39:22.2359940Z Cleaning up orphan processes

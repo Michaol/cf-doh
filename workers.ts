@@ -62,8 +62,8 @@ let DEBUG = false;
 
 // DNS Cache Config
 const DNS_CACHE_CONFIG = {
-	minTtl: 60,       // Minimum 60 seconds
-	maxTtl: 3600,     // Maximum 1 hour
+	minTtl: 60, // Minimum 60 seconds
+	maxTtl: 3600, // Maximum 1 hour
 	negativeTtl: 300, // NXDOMAIN cache 5 minutes
 	prefetchThreshold: 0.2, // Prefetch when remaining TTL < 20%
 };
@@ -105,9 +105,8 @@ export default {
 		if (env.CACHE_TTL_SECONDS) CACHE_TTL_SECONDS = Number.parseInt(env.CACHE_TTL_SECONDS, 10) || 86400;
 		DEBUG = env.DEBUG === 'true';
 		if (env.COUNTRY_PRIORITY) {
-			COUNTRY_PRIORITY = env.COUNTRY_PRIORITY.split(',').map(c => c.trim().toUpperCase());
+			COUNTRY_PRIORITY = env.COUNTRY_PRIORITY.split(',').map((c) => c.trim().toUpperCase());
 		}
-
 
 		// Initialize D1 straight from bindings for best read performance
 		geoip_db ??= env.geolite2_country;
@@ -207,15 +206,11 @@ function handleStats(): Response {
 		requests: STATS.requests,
 		geoipCache: {
 			...STATS.cache,
-			hitRate: totalCacheOps > 0 
-				? ((STATS.cache.memHits + STATS.cache.apiHits) / totalCacheOps).toFixed(3)
-				: 'N/A',
+			hitRate: totalCacheOps > 0 ? ((STATS.cache.memHits + STATS.cache.apiHits) / totalCacheOps).toFixed(3) : 'N/A',
 		},
 		dnsCache: {
 			...STATS.dns,
-			hitRate: totalDnsOps > 0
-				? (STATS.dns.cacheHits / totalDnsOps).toFixed(3)
-				: 'N/A',
+			hitRate: totalDnsOps > 0 ? (STATS.dns.cacheHits / totalDnsOps).toFixed(3) : 'N/A',
 		},
 		errors: STATS.errors,
 	};
@@ -390,9 +385,12 @@ async function handleDoH(request: Request, url: URL, env: Env, ctx: ExecutionCon
 	}
 	const queryData = queryResult;
 
-	// Smart DNS resolution with country matching
-	async function queryDnsWithClientIp(): Promise<{ response: Response; country: string | null; priority: number }> {
-		const response = await queryDns(queryData, clientIp, ctx);
+	// Unified DNS query function with country matching
+	async function queryDnsWithIp(
+		ip: string | null,
+		label: string
+	): Promise<{ response: Response; country: string | null; priority: number }> {
+		const response = await queryDns(queryData, ip, ctx);
 		const buffer = await response.arrayBuffer();
 		const dnsResponse = parseDnsResponse(buffer);
 
@@ -402,45 +400,19 @@ async function handleDoH(request: Request, url: URL, env: Env, ctx: ExecutionCon
 
 		const responseIpSample = dnsResponse.answers[0];
 		const responseIpCountry = await ip2country(responseIpSample.ip, ctx);
-		const priority = responseIpCountry 
-			? COUNTRY_PRIORITY.indexOf(responseIpCountry)
-			: -1;
+		const priority = responseIpCountry ? COUNTRY_PRIORITY.indexOf(responseIpCountry) : -1;
 
-		log(`Client IP response: ${responseIpSample.ip}, Country: ${responseIpCountry}, Priority: ${priority}`);
+		log(`${label} response: ${responseIpSample.ip}, Country: ${responseIpCountry}, Priority: ${priority}`);
 
-		return { 
-			response: new Response(buffer, response), 
-			country: responseIpCountry, 
-			priority: priority >= 0 ? priority : 999 // Not in list = lowest priority
-		};
-	}
-
-	async function queryDnsWithAltIp(): Promise<{ response: Response; country: string | null; priority: number }> {
-		const response = await queryDns(queryData, alternativeIp, ctx);
-		const buffer = await response.arrayBuffer();
-		const dnsResponse = parseDnsResponse(buffer);
-
-		if (!dnsResponse.answers.length) {
-			return { response: new Response(buffer, response), country: null, priority: -1 };
-		}
-
-		const responseIpSample = dnsResponse.answers[0];
-		const responseIpCountry = await ip2country(responseIpSample.ip, ctx);
-		const priority = responseIpCountry 
-			? COUNTRY_PRIORITY.indexOf(responseIpCountry)
-			: -1;
-
-		log(`Alt IP response: ${responseIpSample.ip}, Country: ${responseIpCountry}, Priority: ${priority}`);
-
-		return { 
-			response: new Response(buffer, response), 
-			country: responseIpCountry, 
-			priority: priority >= 0 ? priority : 999
+		return {
+			response: new Response(buffer, response),
+			country: responseIpCountry,
+			priority: priority >= 0 ? priority : 999, // Not in list = lowest priority
 		};
 	}
 
 	const queryUpstreamStart = Date.now();
-	const [clientResult, altResult] = await Promise.all([queryDnsWithClientIp(), queryDnsWithAltIp()]);
+	const [clientResult, altResult] = await Promise.all([queryDnsWithIp(clientIp, 'Client IP'), queryDnsWithIp(alternativeIp, 'Alt IP')]);
 	const queryUpstreamEnd = Date.now();
 
 	log(`Query Upstream Time: ${queryUpstreamEnd - queryUpstreamStart}ms`);
@@ -523,33 +495,28 @@ async function parseDnsQuery(request: Request, url: URL): Promise<Uint8Array | R
 /**
  * Check L1 memory cache and handle prefetching.
  */
-function checkL1Cache(
-	cacheKey: string,
-	queryData: Uint8Array,
-	clientIp: string | null,
-	ctx?: ExecutionContext
-): Response | null {
+function checkL1Cache(cacheKey: string, queryData: Uint8Array, clientIp: string | null, ctx?: ExecutionContext): Response | null {
 	const cachedEntry = DNS_CACHE.get(cacheKey);
 	if (!cachedEntry || cachedEntry.expires <= Date.now()) {
 		return null;
 	}
-	
+
 	STATS.dns.cacheHits++;
 	log(`DNS Cache HIT (memory): ${cacheKey}`);
-	
+
 	// Check if we need to prefetch (remaining TTL < threshold)
 	if (ctx) {
 		const remainingMs = cachedEntry.expires - Date.now();
 		const totalTtlMs = (cachedEntry.ttl || 300) * 1000;
 		const remainingRatio = remainingMs / totalTtlMs;
-		
+
 		if (remainingRatio < DNS_CACHE_CONFIG.prefetchThreshold) {
 			STATS.dns.prefetches++;
 			log(`DNS Prefetch triggered: ${cacheKey}, remaining: ${Math.round(remainingRatio * 100)}%`);
 			ctx.waitUntil(prefetchDns(queryData, clientIp, cacheKey));
 		}
 	}
-	
+
 	return new Response(cachedEntry.data, {
 		headers: { 'Content-Type': 'application/dns-message' },
 	});
@@ -564,12 +531,12 @@ async function checkL2Cache(cacheKey: string, cacheUrl: Request): Promise<Respon
 	if (!cachedResponse) {
 		return null;
 	}
-	
+
 	STATS.dns.cacheHits++;
 	log(`DNS Cache HIT (cache api): ${cacheKey}`);
-	
+
 	const buffer = await cachedResponse.clone().arrayBuffer();
-	
+
 	// Use remaining TTL from X-Expires-At, fall back to 60s
 	let ttl = 60;
 	const expiresAtStr = cachedResponse.headers.get('X-Expires-At');
@@ -579,7 +546,7 @@ async function checkL2Cache(cacheKey: string, cacheUrl: Request): Promise<Respon
 			ttl = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
 		}
 	}
-	
+
 	// Skip L1 cache if already expired
 	if (ttl <= 0) {
 		log(`Skipping L1 cache: TTL expired (${cacheKey})`);
@@ -587,7 +554,7 @@ async function checkL2Cache(cacheKey: string, cacheUrl: Request): Promise<Respon
 			headers: { 'Content-Type': 'application/dns-message' },
 		});
 	}
-	
+
 	updateDnsCache(cacheKey, buffer, ttl);
 	return new Response(buffer, {
 		headers: { 'Content-Type': 'application/dns-message' },
@@ -596,7 +563,7 @@ async function checkL2Cache(cacheKey: string, cacheUrl: Request): Promise<Respon
 
 async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: ExecutionContext): Promise<Response> {
 	const cacheKey = generateDnsCacheKey(queryData, clientIp);
-	
+
 	// Check L1 Memory Cache
 	const l1Result = checkL1Cache(cacheKey, queryData, clientIp, ctx);
 	if (l1Result) return l1Result;
@@ -615,7 +582,7 @@ async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: Ex
 	// Parse response to get TTL and check for NXDOMAIN
 	const dnsResponse = parseDnsResponse(buffer);
 	const rcode = dnsResponse.flags & 0xf;
-	
+
 	let ttl: number;
 	if (rcode === 3) {
 		// NXDOMAIN - use negative TTL
@@ -634,19 +601,8 @@ async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: Ex
 	// Update L1 cache
 	updateDnsCache(cacheKey, buffer, ttl);
 
-	// Update L2 cache (async)
-	const cache = caches.default;
-	const cacheResponse = new Response(buffer, {
-		headers: {
-			'Content-Type': 'application/dns-message',
-			'Cache-Control': `max-age=${ttl}`,
-			'X-Expires-At': `${Date.now() + ttl * 1000}`,
-		},
-	});
-	cache.put(cacheUrl, cacheResponse).catch((err) => {
-		STATS.errors++;
-		log(`Cache put failed: ${err.message || err}`);
-	});
+	// Update L2 cache (async, fire-and-forget)
+	updateL2Cache(cacheKey, buffer, ttl, false);
 
 	return new Response(buffer, {
 		headers: { 'Content-Type': 'application/dns-message' },
@@ -655,22 +611,23 @@ async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: Ex
 
 /**
  * Generate cache key from DNS query data and client IP prefix.
+ * Optimized: uses array join instead of repeated string concatenation.
  */
 function generateDnsCacheKey(queryData: Uint8Array, clientIp: string | null): string {
 	// Extract domain name and type from query
 	let offset = 12; // Skip header
-	let domain = '';
+	const domainParts: string[] = [];
 	while (queryData[offset] !== 0) {
 		const len = queryData[offset];
-		if (domain) domain += '.';
-		for (let i = 1; i <= len; i++) {
-			domain += String.fromCodePoint(queryData[offset + i] ?? 0);
-		}
+		// Use subarray and convert to string via TextDecoder or manual codepoints
+		const part = Array.from(queryData.slice(offset + 1, offset + 1 + len), b => String.fromCodePoint(b)).join('');
+		domainParts.push(part);
 		offset += len + 1;
 	}
+	const domain = domainParts.join('.');
 	offset++; // Skip null terminator
 	const qtype = (queryData[offset] << 8) | queryData[offset + 1];
-	
+
 	// Get IP prefix for ECS-aware caching
 	let ipPrefix = 'none';
 	if (clientIp) {
@@ -682,7 +639,7 @@ function generateDnsCacheKey(queryData: Uint8Array, clientIp: string | null): st
 			ipPrefix = clientIp.split(':').slice(0, 3).join(':');
 		}
 	}
-	
+
 	return `${domain}:${qtype}:${ipPrefix}`;
 }
 
@@ -703,30 +660,54 @@ function updateDnsCache(key: string, data: ArrayBuffer, ttlSeconds: number): voi
 }
 
 /**
+ * Update L2 Cache API with DNS response.
+ * @param cacheKey - The cache key
+ * @param buffer - DNS response buffer
+ * @param ttl - TTL in seconds
+ * @param waitForComplete - If true, await the cache.put; otherwise fire-and-forget
+ */
+async function updateL2Cache(
+	cacheKey: string,
+	buffer: ArrayBuffer,
+	ttl: number,
+	waitForComplete: boolean = false
+): Promise<void> {
+	const cache = caches.default;
+	const cacheUrl = new Request(`https://dns-cache.internal/${cacheKey}`);
+	const cacheResponse = new Response(buffer, {
+		headers: {
+			'Content-Type': 'application/dns-message',
+			'Cache-Control': `max-age=${ttl}`,
+			'X-Expires-At': `${Date.now() + ttl * 1000}`,
+		},
+	});
+
+	const updatePromise = cache.put(cacheUrl, cacheResponse).catch((err) => {
+		STATS.errors++;
+		log(`Cache put failed: ${err.message || err}`);
+	});
+
+	if (waitForComplete) {
+		await updatePromise;
+	}
+}
+
+/**
  * Prefetch DNS response in background before cache expires.
  */
 async function prefetchDns(queryData: Uint8Array, clientIp: string | null, cacheKey: string): Promise<void> {
 	try {
 		const response = await queryDnsUpstream(queryData, clientIp);
 		const buffer = await response.arrayBuffer();
-		
+
 		const dnsResponse = parseDnsResponse(buffer);
 		if (dnsResponse.answers.length > 0) {
 			const ttl = Math.min(Math.max(dnsResponse.minTtl, DNS_CACHE_CONFIG.minTtl), DNS_CACHE_CONFIG.maxTtl);
 			updateDnsCache(cacheKey, buffer, ttl);
-			
-			// Also update L2 cache
-			const cache = caches.default;
-			const cacheUrl = new Request(`https://dns-cache.internal/${cacheKey}`);
-			const cacheResponse = new Response(buffer, {
-				headers: {
-					'Content-Type': 'application/dns-message',
-					'Cache-Control': `max-age=${ttl}`,
-					'X-Expires-At': `${Date.now() + ttl * 1000}`,
-				},
-			});
-			await cache.put(cacheUrl, cacheResponse);
-			
+
+			// Also update L2 cache (wait for completion in prefetch)
+			await updateL2Cache(cacheKey, buffer, ttl, true);
+
 			log(`DNS Prefetch completed: ${cacheKey}, TTL: ${ttl}s`);
 		}
 	} catch (err) {
@@ -837,7 +818,14 @@ function combineQueryData(headerAndQuestion: Uint8Array, optRecord: Uint8Array):
 // ============================================================
 
 function isIPv4(ip: string): boolean {
-	return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip);
+	// Validate IPv4: split and check each octet is 0-255
+	const parts = ip.split('.');
+	if (parts.length !== 4) return false;
+	for (const part of parts) {
+		const num = Number.parseInt(part, 10);
+		if (Number.isNaN(num) || num < 0 || num > 255 || part !== String(num)) return false;
+	}
+	return true;
 }
 
 function isIPv6(ip: string): boolean {
@@ -1080,17 +1068,22 @@ function parseAnswerRecord(data: Uint8Array, offset: number): { answer: DnsAnswe
 	return { answer, newOffset: offset + dataLen };
 }
 
+/**
+ * Parse DNS response buffer.
+ * Optimized: uses DataView for header parsing and calculates minTtl in-loop.
+ */
 function parseDnsResponse(buffer: ArrayBuffer): DnsResponse {
 	const data = new Uint8Array(buffer);
+	const view = new DataView(buffer);
 	let offset = 0;
 
-	// Parse header (12 bytes)
-	const id = (data[offset] << 8) | data[offset + 1];
-	const flags = (data[offset + 2] << 8) | data[offset + 3];
-	const qdCount = (data[offset + 4] << 8) | data[offset + 5];
-	const anCount = (data[offset + 6] << 8) | data[offset + 7];
-	const nsCount = (data[offset + 8] << 8) | data[offset + 9];
-	const arCount = (data[offset + 10] << 8) | data[offset + 11];
+	// Parse header (12 bytes) - using DataView for cleaner 16-bit reads
+	const id = view.getUint16(0);
+	const flags = view.getUint16(2);
+	const qdCount = view.getUint16(4);
+	const anCount = view.getUint16(6);
+	const nsCount = view.getUint16(8);
+	const arCount = view.getUint16(10);
 	offset = 12;
 
 	// Skip question section
@@ -1098,18 +1091,21 @@ function parseDnsResponse(buffer: ArrayBuffer): DnsResponse {
 		offset = skipDnsName(data, offset) + 4; // Skip QTYPE(2) + QCLASS(2)
 	}
 
-	// Parse answer section
+	// Parse answer section with inline minTtl calculation
 	const answers: DnsAnswer[] = [];
+	let minTtl = Infinity;
+
 	for (let i = 0; i < anCount; i++) {
 		const { answer, newOffset } = parseAnswerRecord(data, offset);
-		if (answer) answers.push(answer);
+		if (answer) {
+			answers.push(answer);
+			if (answer.ttl < minTtl) minTtl = answer.ttl;
+		}
 		offset = newOffset;
 	}
 
-	// Calculate minimum TTL from all answers
-	const minTtl = answers.length > 0 
-		? Math.min(...answers.map(a => a.ttl))
-		: 0;
+	// Finalize minTtl (0 if no answers)
+	const finalMinTtl = minTtl === Infinity ? 0 : minTtl;
 
-	return { id, flags, qdCount, anCount, nsCount, arCount, answers, minTtl };
+	return { id, flags, qdCount, anCount, nsCount, arCount, answers, minTtl: finalMinTtl };
 }

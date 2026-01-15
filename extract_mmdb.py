@@ -4,7 +4,9 @@ Extract IPv4 and IPv6 data from Country.mmdb (Loyalsoldier format).
 Outputs CSV files compatible with D1 import.
 """
 
+import argparse
 import csv
+import os
 import sys
 import ipaddress
 
@@ -37,7 +39,30 @@ def cidr_to_network_start(cidr: str, is_ipv6: bool = False):
         return ip_to_int(str(network.network_address))
 
 
-def extract_mmdb(mmdb_path: str, ipv4_output: str, ipv6_output: str):
+def get_country_code(data):
+    """Extract country ISO code from MMDB data record."""
+    if not data:
+        return None
+    if 'country' in data and 'iso_code' in data['country']:
+        return data['country']['iso_code']
+    if 'registered_country' in data and 'iso_code' in data['registered_country']:
+        return data['registered_country']['iso_code']
+    return None
+
+
+def process_network(network, country_code):
+    """Process a single network entry and return record dict."""
+    cidr = str(network)
+    is_ipv6 = network.version != 4
+    network_start = cidr_to_network_start(cidr, is_ipv6=is_ipv6)
+    return {
+        'network': cidr,
+        'network_start': network_start,
+        'country_iso_code': country_code
+    }
+
+
+def extract_mmdb(mmdb_path: str, ipv4_output: str, ipv6_output: str) -> None:
     """
     Read Country.mmdb and export to two CSV files.
     
@@ -49,37 +74,22 @@ def extract_mmdb(mmdb_path: str, ipv4_output: str, ipv6_output: str):
     with maxminddb.open_database(mmdb_path) as reader:
         ipv4_records = []
         ipv6_records = []
+        processed = 0
         
         for network, data in reader:
-            # Extract country code
-            country_code = None
-            if data:
-                # Try different paths to get country code
-                if 'country' in data and 'iso_code' in data['country']:
-                    country_code = data['country']['iso_code']
-                elif 'registered_country' in data and 'iso_code' in data['registered_country']:
-                    country_code = data['registered_country']['iso_code']
+            processed += 1
+            if processed % 50000 == 0:
+                print(f"  Processed {processed} networks...")
             
+            country_code = get_country_code(data)
             if not country_code:
                 continue
             
-            cidr = str(network)
-            
-            # Determine if IPv4 or IPv6
+            record = process_network(network, country_code)
             if network.version == 4:
-                network_start = cidr_to_network_start(cidr, is_ipv6=False)
-                ipv4_records.append({
-                    'network': cidr,
-                    'network_start': network_start,
-                    'country_iso_code': country_code
-                })
+                ipv4_records.append(record)
             else:
-                network_start = cidr_to_network_start(cidr, is_ipv6=True)
-                ipv6_records.append({
-                    'network': cidr,
-                    'network_start': network_start,
-                    'country_iso_code': country_code
-                })
+                ipv6_records.append(record)
         
         print(f"Extracted {len(ipv4_records)} IPv4 records, {len(ipv6_records)} IPv6 records")
         
@@ -104,13 +114,63 @@ def extract_mmdb(mmdb_path: str, ipv4_output: str, ipv6_output: str):
         print("Done!")
 
 
-if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("Usage: python extract_mmdb.py <Country.mmdb> [ipv4_output.csv] [ipv6_output.csv]")
+def validate_inputs(mmdb_path: str, ipv4_output: str, ipv6_output: str) -> None:
+    """Validate input parameters."""
+    if not os.path.isfile(mmdb_path):
+        raise FileNotFoundError(f"MMDB file not found: {mmdb_path}")
+    
+    for output_path in [ipv4_output, ipv6_output]:
+        output_dir = os.path.dirname(output_path) or '.'
+        if not os.path.isdir(output_dir):
+            raise ValueError(f"Output directory does not exist: {output_dir}")
+        if not os.access(output_dir, os.W_OK):
+            raise PermissionError(f"No write permission to directory: {output_dir}")
+
+
+def main():
+    """Main entry point with argument parsing and validation."""
+    parser = argparse.ArgumentParser(
+        description='Extract IPv4 and IPv6 data from Country.mmdb (Loyalsoldier format)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python extract_mmdb.py Country.mmdb
+  python extract_mmdb.py Country.mmdb custom_ipv4.csv custom_ipv6.csv
+        '''
+    )
+    
+    parser.add_argument(
+        'mmdb_path',
+        help='Path to the Country.mmdb file'
+    )
+    
+    parser.add_argument(
+        'ipv4_output',
+        nargs='?',
+        default='blocks_ipv4.csv',
+        help='Output path for IPv4 CSV file (default: blocks_ipv4.csv)'
+    )
+    
+    parser.add_argument(
+        'ipv6_output',
+        nargs='?',
+        default='blocks_ipv6.csv',
+        help='Output path for IPv6 CSV file (default: blocks_ipv6.csv)'
+    )
+    
+    args = parser.parse_args()
+    
+    try:
+        validate_inputs(args.mmdb_path, args.ipv4_output, args.ipv6_output)
+        extract_mmdb(args.mmdb_path, args.ipv4_output, args.ipv6_output)
+    except (FileNotFoundError, ValueError, PermissionError) as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-    
-    mmdb_path = sys.argv[1]
-    ipv4_output = sys.argv[2] if len(sys.argv) > 2 else 'blocks_ipv4.csv'
-    ipv6_output = sys.argv[3] if len(sys.argv) > 3 else 'blocks_ipv6.csv'
-    
-    extract_mmdb(mmdb_path, ipv4_output, ipv6_output)
+    except Exception as e:
+        print(f"Unexpected error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
+
