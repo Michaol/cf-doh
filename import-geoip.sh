@@ -42,15 +42,8 @@ retry_with_backoff() {
     return 1
 }
 
-# Cleanup function for trap
-cleanup() {
-    echo "Cleaning up temporary files..."
-    cd ..
-    rm -rf tmp
-}
-
-# Prepare workspace with cleanup trap
-trap cleanup EXIT
+# Prepare workspace (clean old tmp if exists)
+rm -rf tmp
 mkdir -p tmp
 cd tmp
 
