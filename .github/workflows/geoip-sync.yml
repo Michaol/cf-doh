@@ -1,0 +1,86 @@
+name: GeoIP Daily Sync
+
+# Phase 3+5 vehicle: one daily job that bootstraps the long-lived database
+# (quota-sized chunks, <=1/day on the free plan) and then keeps it converged
+# to the latest Loyalsoldier release via gated, idempotent deltas.
+# Exit codes from geoip_sync.py: 0 ok / 1 error / 3 escalate (delta gate
+# rejected -> needs manual trickle rebuild); failures open a deduplicated
+# issue via notify-failure.
+
+on:
+  schedule:
+    - cron: '45 10 * * *' # daily; off-hour per GitHub scheduler guidance; quota resets 00:00 UTC
+  workflow_dispatch:
+    inputs:
+      chunks_per_run:
+        description: 'Bootstrap chunks to apply this run (free plan: keep 1)'
+        required: false
+        default: '1'
+
+concurrency:
+  group: geoip-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          npm ci --ignore-scripts
+          pip install --only-binary :all: maxminddb==3.1.1
+
+      - name: Create long-lived database if absent
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if ! npx --no-install wrangler d1 list --json | jq -e 'any(.[]; .name == "geoip_live_weur")' > /dev/null; then
+            npx --no-install wrangler d1 create geoip_live_weur --location=weur
+          fi
+
+      - name: Sync geoip_live_weur
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CHUNKS: ${{ inputs.chunks_per_run || 1 }}
+        run: python3 geoip_sync.py --db geoip_live_weur --chunks-per-run "$CHUNKS"
+
+      - name: Ping dead-man switch
+        run: |
+          if [ -n "$HC_URL" ]; then
+            curl -fsS --retry 3 "$HC_URL" || true
+          fi
+        env:
+          HC_URL: ${{ secrets.HEALTHCHECK_PING_URL }}
+
+  notify-failure:
+    needs: sync
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open a failure issue (deduplicated)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create ci-failure --color B60205 --description "CI pipeline failure" 2>/dev/null || true
+          OPEN_COUNT=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open --json number --jq length)
+          if [ "$OPEN_COUNT" = "0" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "GeoIP sync failure: run #$GITHUB_RUN_NUMBER" \
+              --label ci-failure \
+              --body "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          fi
