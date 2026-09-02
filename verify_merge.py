@@ -21,11 +21,12 @@ import random
 import sys
 
 from merge_mmdb import extract_raw
+from pathguard import validated_path
 
 
 def load_merged(path, is_v4):
     keys, vals = [], []
-    with open(path, newline='', encoding='utf-8') as f:
+    with open(validated_path(path, must_exist=True), newline='', encoding='utf-8') as f:
         for row in csv.reader(f):
             keys.append(int(row[0]) if is_v4 else int(row[0], 16))
             vals.append(row[1])
@@ -76,11 +77,19 @@ def main():
     p.add_argument('--seed', type=int, default=7)
     args = p.parse_args()
 
+    try:
+        mmdb = validated_path(args.mmdb_path, must_exist=True)
+        v4_csv = validated_path(args.v4_csv, must_exist=True)
+        v6_csv = validated_path(args.v6_csv, must_exist=True)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f'Error: {exc}', file=sys.stderr)
+        return 1
+
     random.seed(args.seed)
-    raw4, raw6 = extract_raw(args.mmdb_path)
-    ok4 = verify_family('IPv4', raw4, args.v4_csv, True, 32,
+    raw4, raw6 = extract_raw(mmdb)
+    ok4 = verify_family('IPv4', raw4, v4_csv, True, 32,
                         args.probes, args.boundary_samples)
-    ok6 = verify_family('IPv6', raw6, args.v6_csv, False, 128,
+    ok6 = verify_family('IPv6', raw6, v6_csv, False, 128,
                         args.probes, args.boundary_samples)
     return 0 if ok4 and ok6 else 1
 
