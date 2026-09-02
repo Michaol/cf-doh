@@ -20,6 +20,7 @@ interface Env {
 	MEM_CACHE_MAX_SIZE?: string;
 	CACHE_TTL_SECONDS?: string;
 	DEBUG?: string;
+	DEBUG_TOKEN?: string;
 	COUNTRY_PRIORITY?: string;
 }
 
@@ -144,6 +145,11 @@ export default {
 
 		if (path.startsWith('/debug/ip/')) {
 			STATS.requests.debug++;
+			// Token-gated (default closed): unauthenticated geo lookups are a
+			// read-quota burn amplifier (5M rows_read/day is account-wide).
+			if (!env.DEBUG_TOKEN || request.headers.get('x-debug-token') !== env.DEBUG_TOKEN) {
+				return handleCors(new Response('Not Found', { status: 404 }));
+			}
 			const ip = path.substring('/debug/ip/'.length);
 			return handleCors(await handleDebugIp(ip, ctx));
 		}
@@ -402,6 +408,12 @@ async function handleDoH(request: Request, url: URL, env: Env, ctx: ExecutionCon
 	}
 	const queryData = queryResult;
 
+	// Bounds-safe structural check before any parse loop touches the bytes
+	const malformed = validateDnsQuery(queryData);
+	if (malformed) {
+		return malformed;
+	}
+
 	// Unified DNS query function with country matching
 	async function queryDnsWithIp(
 		ip: string | null,
@@ -510,6 +522,55 @@ function parseAlternativeIp(params: string[], clientIp: string | null): string |
 }
 
 /**
+ * Structural validation of a client DNS query before any parse loop runs:
+ * header length, exactly one question, fully bounded label walk.
+ * Returns null when valid, or a 400 Response when malformed.
+ */
+function validateDnsQuery(data: Uint8Array): Response | null {
+	if (data.length < 12) {
+		return new Response('Malformed DNS query: shorter than header', { status: 400 });
+	}
+	const qdcount = (data[4] << 8) | data[5];
+	if (qdcount !== 1) {
+		return new Response('Malformed DNS query: expected exactly one question', { status: 400 });
+	}
+	let offset = 12;
+	for (;;) {
+		if (offset >= data.length) {
+			return new Response('Malformed DNS query: truncated name', { status: 400 });
+		}
+		const len = data[offset];
+		if (len === 0) {
+			offset++;
+			break;
+		}
+		if (len > 63) {
+			return new Response('Malformed DNS query: invalid label length or compression pointer', { status: 400 });
+		}
+		offset += 1 + len;
+	}
+	if (offset + 4 > data.length) {
+		return new Response('Malformed DNS query: truncated QTYPE/QCLASS', { status: 400 });
+	}
+	return null;
+}
+
+/**
+ * Copy a cached DNS response with its message ID rewritten to the current
+ * query's ID (strict RFC 8484 clients discard ID-mismatched responses).
+ * The stored cache buffer is never mutated.
+ */
+function patchDnsId(cached: ArrayBuffer, queryData: Uint8Array): ArrayBuffer {
+	if (cached.byteLength < 12 || queryData.length < 2) {
+		return cached;
+	}
+	const out = new Uint8Array(cached.slice(0));
+	out[0] = queryData[0];
+	out[1] = queryData[1];
+	return out.buffer;
+}
+
+/**
  * Parse DNS query from request (GET or POST).
  */
 async function parseDnsQuery(request: Request, url: URL): Promise<Uint8Array | Response> {
@@ -519,7 +580,8 @@ async function parseDnsQuery(request: Request, url: URL): Promise<Uint8Array | R
 			return new Response('Missing dns parameter', { status: 400 });
 		}
 		try {
-			const decodedQuery = atob(dnsParam);
+			// RFC 8484 GET uses base64url; atob only accepts the standard alphabet
+			const decodedQuery = atob(dnsParam.replace(/-/g, '+').replace(/_/g, '/'));
 			return Uint8Array.from(decodedQuery, (c) => c.codePointAt(0) ?? 0);
 		} catch {
 			return new Response('Invalid dns parameter encoding', { status: 400 });
@@ -563,7 +625,8 @@ function checkL1Cache(cacheKey: string, queryData: Uint8Array, clientIp: string 
 		}
 	}
 
-	return new Response(cachedEntry.data, {
+	// Serve with the current query's ID (cached buffer keeps the original)
+	return new Response(patchDnsId(cachedEntry.data, queryData), {
 		headers: { 'Content-Type': 'application/dns-message' },
 	});
 }
@@ -571,7 +634,7 @@ function checkL1Cache(cacheKey: string, queryData: Uint8Array, clientIp: string 
 /**
  * Check L2 Cache API and optionally warm up L1.
  */
-async function checkL2Cache(cacheKey: string, cacheUrl: Request): Promise<Response | null> {
+async function checkL2Cache(cacheKey: string, cacheUrl: Request, queryData: Uint8Array): Promise<Response | null> {
 	const cache = caches.default;
 	const cachedResponse = await cache.match(cacheUrl);
 	if (!cachedResponse) {
@@ -596,13 +659,13 @@ async function checkL2Cache(cacheKey: string, cacheUrl: Request): Promise<Respon
 	// Skip L1 cache if already expired
 	if (ttl <= 0) {
 		log(`Skipping L1 cache: TTL expired (${cacheKey})`);
-		return new Response(buffer, {
+		return new Response(patchDnsId(buffer, queryData), {
 			headers: { 'Content-Type': 'application/dns-message' },
 		});
 	}
 
 	updateDnsCache(cacheKey, buffer, ttl);
-	return new Response(buffer, {
+	return new Response(patchDnsId(buffer, queryData), {
 		headers: { 'Content-Type': 'application/dns-message' },
 	});
 }
@@ -616,7 +679,7 @@ async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: Ex
 
 	// Check L2 Cache API
 	const cacheUrl = new Request(`https://dns-cache.internal/${cacheKey}`);
-	const l2Result = await checkL2Cache(cacheKey, cacheUrl);
+	const l2Result = await checkL2Cache(cacheKey, cacheUrl, queryData);
 	if (l2Result) return l2Result;
 
 	STATS.dns.cacheMisses++;
@@ -663,8 +726,9 @@ function generateDnsCacheKey(queryData: Uint8Array, clientIp: string | null): st
 	// Extract domain name and type from query
 	let offset = 12; // Skip header
 	const domainParts: string[] = [];
-	while (queryData[offset] !== 0) {
+	while (offset < queryData.length && queryData[offset] !== 0) {
 		const len = queryData[offset];
+		if (offset + 1 + len > queryData.length) break; // bounds guard
 		// Use subarray and convert to string via TextDecoder or manual codepoints
 		const part = Array.from(queryData.slice(offset + 1, offset + 1 + len), b => String.fromCodePoint(b)).join('');
 		domainParts.push(part);
@@ -815,7 +879,7 @@ function extractHeaderAndQuestion(data: Uint8Array): [Uint8Array, number] {
 	const qdcount = (data[4] << 8) | data[5];
 
 	for (let i = 0; i < qdcount; i++) {
-		while (data[offset] !== 0) offset++;
+		while (offset < data.length && data[offset] !== 0) offset++;
 		offset += 5;
 	}
 
@@ -1074,10 +1138,10 @@ const DNS_TYPE_AAAA = 28;
  * Returns the new offset after skipping the name.
  */
 function skipDnsName(data: Uint8Array, offset: number): number {
-	if ((data[offset] & 0xc0) === 0xc0) {
+	if (offset < data.length && (data[offset] & 0xc0) === 0xc0) {
 		return offset + 2; // Compressed name pointer
 	}
-	while (data[offset] !== 0) offset++;
+	while (offset < data.length && data[offset] !== 0) offset++;
 	return offset + 1;
 }
 

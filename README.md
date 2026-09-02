@@ -43,7 +43,7 @@
 | :---------------------- | :-------------------------------------------------------------------------------------- |
 | `CLOUDFLARE_API_TOKEN`  | 你的 Cloudflare API Token。[在此获取](https://dash.cloudflare.com/profile/api-tokens)。 |
 | `CLOUDFLARE_ACCOUNT_ID` | 你的 Cloudflare Account ID。可在 Cloudflare 控制面板的 URL 中找到。                     |
-| `UPSTREAM_ENDPOINT`     | （可选）自定义主上游 DoH 服务器（默认：`https://1.1.1.1/dns-query`）。                  |
+| `HEALTHCHECK_PING_URL`  | （可选）healthchecks.io dead-man 告警的 Ping URL；未配置时心跳步骤静默跳过。            |
 
 > **CLOUDFLARE_API_TOKEN 必需权限 (Custom Token)**:
 >
@@ -55,9 +55,8 @@
 部署工作流自动运行：
 
 1. **启用工作流**: 进入仓库的 **Actions** 标签页，如有提示请启用工作流。
-2. **触发部署**: 工作流在每次推送到 `main` 分支时自动运行，也会在每周二 10:30 UTC 定时运行。你也可以从 **Actions** 标签页手动触发，选择 "Deploy" 工作流并点击 **Run workflow**。
-
-> **自动设置**: 工作流将自动从 Loyalsoldier 下载 GeoIP 数据库，创建 D1 数据库，导入数据（IPv4 和 IPv6），并部署 Worker。
+2. **部署 Worker**: 从 **Actions** 标签页手动触发 "Deploy to Cloudflare Workers"（mode 选 `worker-only`）。
+3. **GeoIP 数据**: 由 "GeoIP Daily Sync" 工作流每天 10:45 UTC 自动维护——首次运行会创建 `geoip_live_weur` 并按每日配额分块引导数据（约 7 天），之后以增量方式收敛到 Loyalsoldier 最新 release（无新 release 时零写入）。详见 [RUNBOOK.md](RUNBOOK.md)。
 
 ## 配置
 
@@ -72,6 +71,7 @@ Worker 主要通过上述定义的 **GitHub Secrets** 进行配置。
 | `MEM_CACHE_MAX_SIZE` | `10000`             | GeoIP 内存缓存的最大条目数          |
 | `CACHE_TTL_SECONDS`  | `86400`             | GeoIP 缓存 TTL，单位为秒（24 小时） |
 | `DEBUG`              | `false`             | 启用详细日志（设置为 `true` 启用）  |
+| `DEBUG_TOKEN`        | （未设置）          | `/debug/ip/` 端点访问令牌；未设置时该端点一律返回 404（默认关闭） |
 | `COUNTRY_PRIORITY`   | `CN,HK,TW,JP,SG,US` | 路由的国家优先级，逗号分隔          |
 
 **wrangler.toml 示例:**
@@ -110,10 +110,13 @@ GET https://<your-worker-domain>/health
 GET https://<your-worker-domain>/stats
 ```
 
-### IP 调试
+### IP 调试（需令牌）
 
 ```bash
-GET https://<your-worker-domain>/debug/ip/8.8.8.8
+# 需先为 Worker 设置 DEBUG_TOKEN（Dashboard → Workers & Pages → doh → Settings →
+# Variables and Secrets，或 `wrangler secret put DEBUG_TOKEN`）。
+# 未设置令牌时此端点一律返回 404（防止被用作地理查询预言机消耗读配额）。
+curl -H "x-debug-token: <你的令牌>" "https://<your-worker-domain>/debug/ip/8.8.8.8"
 ```
 
 ## API 参考

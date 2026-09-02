@@ -77,6 +77,12 @@ npx wrangler d1 delete <name> -y           # 逐个按名显式删除
 **绝不**按位置/管道 tail 批量删（旧脚本的 off-by-one 曾可能删掉线上库）。
 删除前用 `wrangler deployments status doh` 或 wrangler.toml 确认线上绑定的 uuid。
 
+### 3.7 /debug/ip 调试端点
+默认关闭（一律 404）。启用：Dashboard → Workers & Pages → doh → Settings →
+Variables and Secrets 添加 Secret `DEBUG_TOKEN`（或 `wrangler secret put DEBUG_TOKEN`），
+请求时携带 `x-debug-token: <值>` 头。未认证时该端点可被用作地理查询预言机，
+消耗账户级 5M rows_read/天 配额，请勿公开令牌。
+
 ## 4. 变更数据管线的守则
 
 - DDL 只有一处：`migrations/0002_merged_pk_schema.sql`。改表 = 新 migration + 更新
