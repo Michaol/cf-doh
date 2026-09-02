@@ -179,6 +179,7 @@ wrangler.toml
 # Python
 __pycache__/
 *.pyc
+.venv/
 
 # Test files
 response.bin
