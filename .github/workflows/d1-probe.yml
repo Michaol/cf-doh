@@ -1,0 +1,55 @@
+name: D1 Platform Probe (Phase 1)
+
+# One-time measurement workflow for the convergence migration (Phase 1):
+# creates a scratch D1 database, measures the billing / DDL / rollback facts
+# the migration plan depends on (see d1_probe.sh header), prints everything
+# to the run log, and ALWAYS deletes the scratch database afterwards.
+# Total cost: < 10k rows_written against the free daily quota.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: d1-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create scratch database
+        id: createdb
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          DB="d1_probe_${{ github.run_number }}"
+          echo "db=$DB" >> "$GITHUB_OUTPUT"
+          npx wrangler d1 create "$DB" --location=weur
+
+      - name: Run measurements
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: ./d1_probe.sh "${{ steps.createdb.outputs.db }}"
+
+      - name: Delete scratch database
+        if: always()
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          DB="${{ steps.createdb.outputs.db }}"
+          if [ -n "$DB" ]; then
+            npx wrangler d1 delete "$DB" -y
+          fi
