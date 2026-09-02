@@ -168,8 +168,10 @@ sed -e "s/^database_name =.*/database_name = \"$database\"/" \
 # ============================================================
 echo "Cleaning up old databases..."
 num_databases_retained=3
+# SAFETY: never touch the long-lived convergence DB (geoip_live*) — this
+# positional retention is legacy and will be deleted at Phase 4 cutover.
 npx --no-install wrangler d1 list --json | jq ".[].name" --raw-output \
-    | grep '^geoip_' | tail -n +$num_databases_retained \
+    | grep '^geoip_' | grep -v '^geoip_live' | tail -n +$num_databases_retained \
     | while read db; do
         echo "Deleting old database: $db"
         npx --no-install wrangler d1 delete $db -y
