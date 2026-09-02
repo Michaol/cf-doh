@@ -39,6 +39,31 @@ def lookup(keys, vals, ip):
     return vals[i - 1] if i else None
 
 
+def verify_family(label, raw, csv_path, is_v4, bits, n_probes, n_boundary):
+    """Probe one address family; return True on zero mismatches."""
+    keys, vals = load_merged(csv_path, is_v4)
+    rkeys = [r[0] for r in raw]
+    rvals = [r[2] for r in raw]
+    sample = random.sample(raw, min(n_boundary, len(raw)))  # NOSONAR - seeded probes for an equivalence test, not a security context
+    probes = ([s for s, _, _ in sample]
+              + [e for _, e, _ in sample]
+              + [random.getrandbits(bits) for _ in range(n_probes)])  # NOSONAR - test probe addresses only
+    mismatches = 0
+    first = None
+    for ip in probes:
+        a = lookup(rkeys, rvals, ip)
+        b = lookup(keys, vals, ip)
+        if a != b:
+            mismatches += 1
+            if first is None:
+                first = (ip, a, b)
+    status = 'OK' if mismatches == 0 else 'MISMATCH'
+    extra = f' first={first}' if first else ''
+    print(f'{label}: raw={len(raw)} merged={len(keys)} probes={len(probes)} '
+          f'mismatches={mismatches} [{status}]{extra}')
+    return mismatches == 0
+
+
 def main():
     p = argparse.ArgumentParser(description='Verify merged GeoIP CSV equivalence')
     p.add_argument('mmdb_path')
@@ -53,32 +78,11 @@ def main():
 
     random.seed(args.seed)
     raw4, raw6 = extract_raw(args.mmdb_path)
-    ok = True
-    for label, raw, csv_path, is_v4, bits in (
-            ('IPv4', raw4, args.v4_csv, True, 32),
-            ('IPv6', raw6, args.v6_csv, False, 128)):
-        keys, vals = load_merged(csv_path, is_v4)
-        rkeys = [r[0] for r in raw]
-        rvals = [r[2] for r in raw]
-        sample = random.sample(raw, min(args.boundary_samples, len(raw)))  # NOSONAR - seeded probes for an equivalence test, not a security context
-        probes = ([s for s, _, _ in sample]
-                  + [e for _, e, _ in sample]
-                  + [random.getrandbits(bits) for _ in range(args.probes)])  # NOSONAR - test probe addresses only
-        mismatches = 0
-        first = None
-        for ip in probes:
-            a = lookup(rkeys, rvals, ip)
-            b = lookup(keys, vals, ip)
-            if a != b:
-                mismatches += 1
-                if first is None:
-                    first = (ip, a, b)
-        status = 'OK' if mismatches == 0 else 'MISMATCH'
-        extra = f' first={first}' if first else ''
-        print(f'{label}: raw={len(raw)} merged={len(keys)} probes={len(probes)} '
-              f'mismatches={mismatches} [{status}]{extra}')
-        ok = ok and mismatches == 0
-    return 0 if ok else 1
+    ok4 = verify_family('IPv4', raw4, args.v4_csv, True, 32,
+                        args.probes, args.boundary_samples)
+    ok6 = verify_family('IPv6', raw6, args.v6_csv, False, 128,
+                        args.probes, args.boundary_samples)
+    return 0 if ok4 and ok6 else 1
 
 
 if __name__ == '__main__':

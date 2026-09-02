@@ -39,10 +39,11 @@ parse_meta() {
 }
 
 run_cmd() { # run_cmd <label> <sql>
-    echo "--- $1"
-    if ! wr --command "$2" --json > "$WORK/out.json" 2> "$WORK/err.log"; then
-        echo "COMMAND FAILED:"
-        cat "$WORK/err.log" "$WORK/out.json" || true
+    local label="$1" sql="$2"
+    echo "--- $label"
+    if ! wr --command "$sql" --json > "$WORK/out.json" 2> "$WORK/err.log"; then
+        echo "COMMAND FAILED:" >&2
+        cat "$WORK/err.log" "$WORK/out.json" >&2 || true
         return 1
     fi
     parse_meta < "$WORK/out.json"
@@ -106,7 +107,7 @@ run_cmd M6 "$(cat "$WORK/p_v4_delete.sql")"
 echo
 echo "=== M7: mid-file failure rollback ==="
 if wr --file="$WORK/p_rollback.sql" --json > "$WORK/out.json" 2> "$WORK/err.log"; then
-    echo "UNEXPECTED: file containing a syntax error reported success"
+    echo "UNEXPECTED: file containing a syntax error reported success" >&2
     cat "$WORK/out.json"
 else
     echo "file failed as expected (stderr tail):"

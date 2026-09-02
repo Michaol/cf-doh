@@ -15,11 +15,11 @@ TAG="${2:-}"
 
 mkdir -p "$OUT_DIR"
 
-if [ -z "$TAG" ]; then
+if [[ -z "$TAG" ]]; then
     TAG=$(curl -fsSL --proto '=https' -H "Accept: application/vnd.github+json" \
         ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
         https://api.github.com/repos/Loyalsoldier/geoip/releases/latest | jq -r .tag_name)
-    if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+    if [[ -z "$TAG" || "$TAG" == "null" ]]; then
         echo "Error: could not resolve latest release tag" >&2
         exit 1
     fi

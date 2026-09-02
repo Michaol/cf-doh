@@ -2,7 +2,7 @@
 
 一个 Cloudflare Worker，通过智能处理 EDNS 客户端子网 (ECS) 来优化 CDN 路由。它使用客户端的实际 IP 和备用 IP（例如 VPN 出口 IP）双重解析 DNS 查询，以选择最佳响应，确保最优性能和内容可用性。
 
-[English Documentation](README_EN.md)
+[English Documentation](README_EN.md) · [运维手册 Runbook](RUNBOOK.md)
 
 ![DoH 架构图](docs/doh_architecture.png)
 
