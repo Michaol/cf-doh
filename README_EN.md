@@ -2,7 +2,7 @@
 
 A Cloudflare Worker that optimizes CDN routing by intelligently handling EDNS Client Subnet (ECS). It dual-resolves DNS queries using both the client's actual IP and an alternative IP (e.g., VPN exit IP) to select the best response, ensuring optimal performance and content availability.
 
-[中文文档](README.md)
+[中文文档](README.md) · [Operations Runbook](RUNBOOK.md)
 
 ![DoH Architecture Diagram](docs/doh_architecture.png)
 
@@ -43,7 +43,7 @@ Go to your forked repository's **Settings** > **Secrets and variables** > **Acti
 | :---------------------- | :---------------------------------------------------------------------------------------- |
 | `CLOUDFLARE_API_TOKEN`  | Your Cloudflare API Token. [Get it here](https://dash.cloudflare.com/profile/api-tokens). |
 | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare Account ID. Found in the URL of your Cloudflare Dashboard.                |
-| `UPSTREAM_ENDPOINT`     | (Optional) Custom primary upstream DoH server (Default: `https://1.1.1.1/dns-query`).     |
+| `HEALTHCHECK_PING_URL`  | (Optional) healthchecks.io dead-man-switch Ping URL; the heartbeat step silently skips when unset. |
 
 > **CLOUDFLARE_API_TOKEN Required Permissions (Custom Token)**:
 >
@@ -52,12 +52,11 @@ Go to your forked repository's **Settings** > **Secrets and variables** > **Acti
 
 ### 3. Deploy
 
-The deployment workflow acts automatically:
+The deployment workflows:
 
 1. **Enable Workflows**: Go to the **Actions** tab in your repository and enable workflows if asked.
-2. **Trigger Deployment**: The workflow runs automatically on every push to the `main` branch or weekly (Tuesday 10:30 UTC). You can also manually trigger it from the **Actions** tab by selecting the "Deploy" workflow and clicking **Run workflow**.
-
-> **Automatic Setup**: The workflow will automatically download the GeoIP database from Loyalsoldier, create the D1 database, import the data (IPv4 & IPv6), and deploy the worker.
+2. **Deploy the Worker**: Manually trigger "Deploy to Cloudflare Workers" from the **Actions** tab (mode: `worker-only`).
+3. **GeoIP Data**: Maintained automatically by the "GeoIP Daily Sync" workflow (daily at 10:45 UTC) — the first run creates `geoip_live_weur` and trickles the data in via quota-sized chunks (~7 days), then keeps it converged to the latest Loyalsoldier release with gated deltas (zero writes when nothing changed). See [RUNBOOK.md](RUNBOOK.md).
 
 ## Configuration
 
@@ -72,6 +71,7 @@ These variables can be set in `wrangler.toml` or Cloudflare Dashboard to customi
 | `MEM_CACHE_MAX_SIZE` | `10000`             | Maximum entries in GeoIP memory cache        |
 | `CACHE_TTL_SECONDS`  | `86400`             | GeoIP cache TTL in seconds (24 hours)        |
 | `DEBUG`              | `false`             | Enable verbose logging (`true` to enable)    |
+| `DEBUG_TOKEN`        | (unset)             | Access token for `/debug/ip/`; when unset the endpoint always returns 404 (closed by default) |
 | `COUNTRY_PRIORITY`   | `CN,HK,TW,JP,SG,US` | Comma-separated country priority for routing |
 
 **Example wrangler.toml:**
@@ -110,10 +110,14 @@ GET https://<your-worker-domain>/health
 GET https://<your-worker-domain>/stats
 ```
 
-### IP Debug
+### IP Debug (token required)
 
 ```bash
-GET https://<your-worker-domain>/debug/ip/8.8.8.8
+# Requires the DEBUG_TOKEN secret on the Worker (Dashboard → Workers & Pages →
+# doh → Settings → Variables and Secrets, or `wrangler secret put DEBUG_TOKEN`).
+# Without a configured token this endpoint always returns 404 (it would
+# otherwise be an unauthenticated geo-oracle burning the D1 read quota).
+curl -H "x-debug-token: <your-token>" "https://<your-worker-domain>/debug/ip/8.8.8.8"
 ```
 
 ## API Reference

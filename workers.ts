@@ -273,7 +273,7 @@ async function handleJsonDns(url: URL, ctx: ExecutionContext): Promise<Response>
 		const queryData = buildDnsQuery(name, type);
 
 		// Query upstream
-		const response = await queryDns(queryData, null);
+		const response = await queryDns(queryData, null, ctx);
 		const buffer = await response.arrayBuffer();
 		const dnsResponse = parseDnsResponse(buffer);
 
@@ -289,7 +289,7 @@ async function handleJsonDns(url: URL, ctx: ExecutionContext): Promise<Response>
 			Answer: dnsResponse.answers.map((a) => ({
 				name,
 				type: a.type === 'AAAA' ? 28 : 1,
-				TTL: 300, // Default TTL
+				TTL: a.ttl, // Real TTL from the upstream answer
 				data: a.ip,
 			})),
 		};
@@ -441,10 +441,13 @@ async function handleDoH(request: Request, url: URL, env: Env, ctx: ExecutionCon
 	}
 
 	const queryUpstreamStart = Date.now();
-	// allSettled: one failing branch must not discard the other's usable answer
+	// allSettled: one failing branch must not discard the other's usable answer.
+	// When both targets are the same IP the queries are identical (same cache
+	// key / ECS) — share one promise instead of double-fetching upstream + D1.
+	const clientPromise = queryDnsWithIp(clientIp, 'Client IP');
 	const [clientSettled, altSettled] = await Promise.allSettled([
-		queryDnsWithIp(clientIp, 'Client IP'),
-		queryDnsWithIp(alternativeIp, 'Alt IP'),
+		clientPromise,
+		alternativeIp === clientIp ? clientPromise : queryDnsWithIp(alternativeIp, 'Alt IP'),
 	]);
 	const queryUpstreamEnd = Date.now();
 
@@ -609,6 +612,10 @@ function checkL1Cache(cacheKey: string, queryData: Uint8Array, clientIp: string 
 		return null;
 	}
 
+	// LRU: refresh position so hot entries are not evicted first
+	DNS_CACHE.delete(cacheKey);
+	DNS_CACHE.set(cacheKey, cachedEntry);
+
 	STATS.dns.cacheHits++;
 	log(`DNS Cache HIT (memory): ${cacheKey}`);
 
@@ -710,8 +717,13 @@ async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: Ex
 	// Update L1 cache
 	updateDnsCache(cacheKey, buffer, ttl);
 
-	// Update L2 cache (async, fire-and-forget)
-	updateL2Cache(cacheKey, buffer, ttl, false);
+	// Update L2 cache: register with the runtime so the put survives the
+	// response being returned (bare fire-and-forget gets cancelled)
+	if (ctx) {
+		ctx.waitUntil(updateL2Cache(cacheKey, buffer, ttl, false));
+	} else {
+		await updateL2Cache(cacheKey, buffer, ttl, true);
+	}
 
 	return new Response(buffer, {
 		headers: { 'Content-Type': 'application/dns-message' },
@@ -762,6 +774,8 @@ function updateDnsCache(key: string, data: ArrayBuffer, ttlSeconds: number): voi
 		const oldestKey = DNS_CACHE.keys().next().value;
 		if (oldestKey) DNS_CACHE.delete(oldestKey);
 	}
+	// LRU: re-insert so an existing key moves to the newest position
+	DNS_CACHE.delete(key);
 	DNS_CACHE.set(key, {
 		data,
 		expires: Date.now() + ttlSeconds * 1000,
@@ -858,6 +872,7 @@ async function queryDnsUpstream(queryData: Uint8Array, clientIp: string | null):
 				log(`DNS Query via ${endpoint}: ${Date.now() - start}ms`);
 				return response;
 			}
+			log(`Upstream ${endpoint} returned HTTP ${response.status}`);
 		} catch (err) {
 			const error = err as Error;
 			log(`Upstream ${endpoint} failed: ${error.message}`);
@@ -918,8 +933,8 @@ function combineQueryData(headerAndQuestion: Uint8Array, optRecord: Uint8Array):
 	const newQueryData = new Uint8Array(headerAndQuestion.length + optRecord.length);
 	newQueryData.set(headerAndQuestion, 0);
 	newQueryData.set(optRecord, headerAndQuestion.length);
-	newQueryData.set([32], 3);
-	newQueryData.set([1], 11);
+	newQueryData[3] |= 0x20; // set AD; preserve the client's CD/Z bits
+	newQueryData.set([1], 11); // ARCOUNT = 1 (the OPT record)
 	return newQueryData;
 }
 
@@ -938,21 +953,39 @@ function isIPv4(ip: string): boolean {
 	return true;
 }
 
+/**
+ * Normalize a trailing IPv4-mapped segment (e.g. ::ffff:1.2.3.4) into two
+ * hex groups. Returns null when a mapped suffix is present but invalid.
+ */
+function normalizeIPv6(ip: string): string | null {
+	const mapped = ip.match(/^(.*:)((?:\d{1,3}\.){3}\d{1,3})$/);
+	if (!mapped) return ip;
+	if (!isIPv4(mapped[2])) return null;
+	const o = mapped[2].split('.').map((p) => Number.parseInt(p, 10));
+	const hi = (((o[0] << 8) | o[1]) >>> 0).toString(16);
+	const lo = (((o[2] << 8) | o[3]) >>> 0).toString(16);
+	return mapped[1] + hi + ':' + lo;
+}
+
 function isIPv6(ip: string): boolean {
-	// Basic IPv6 format validation
 	if (!ip.includes(':')) return false;
-	// Check for valid characters and structure
-	const parts = ip.split(':');
-	if (parts.length < 3 || parts.length > 8) return false;
-	// Allow only one :: (empty string sequence)
-	const emptyParts = parts.filter((p) => p === '').length;
-	if (emptyParts > 2) return false; // More than one :: is invalid
-	// Validate each segment
+	if (ip.includes(':::')) return false;
+	// Exactly one '::' at most
+	if ((ip.match(/::/g) || []).length > 1) return false;
+	// A lone leading/trailing ':' (not part of '::') is invalid
+	if ((ip.startsWith(':') && !ip.startsWith('::')) || (ip.endsWith(':') && !ip.endsWith('::'))) return false;
+	const normalized = normalizeIPv6(ip);
+	if (normalized === null) return false;
+	const parts = normalized.split(':');
+	const hasDoubleColon = normalized.includes('::');
+	let groups = 0;
 	for (const part of parts) {
-		if (part === '') continue; // Empty for ::
+		if (part === '') continue; // empty stems from '::'
 		if (!/^[0-9a-fA-F]{1,4}$/.test(part)) return false;
+		groups++;
 	}
-	return true;
+	// Without '::' exactly 8 groups are required; with '::' at most 7
+	return hasDoubleColon ? groups <= 7 : groups === 8 && parts.length === 8;
 }
 
 function ip4ToNumber(ip: string): number {
@@ -1017,7 +1050,11 @@ function segmentsToBytes(segments: string[]): number[] {
 }
 
 function ipv6ToBytes(ipv6: string): number[] {
-	const parts = ipv6.split(':');
+	const normalized = normalizeIPv6(ipv6);
+	if (normalized === null) {
+		throw new Error('Invalid IPv6 address: bad IPv4-mapped suffix');
+	}
+	const parts = normalized.split(':');
 	const segments = expandIPv6Segments(parts);
 	return segmentsToBytes(segments);
 }
@@ -1043,6 +1080,7 @@ async function ip2country(ip: string, ctx: ExecutionContext): Promise<string | n
 		// LRU: Refresh position
 		MEM_CACHE.delete(ip);
 		MEM_CACHE.set(ip, country);
+		STATS.cache.memHits++;
 		return country;
 	}
 
@@ -1054,6 +1092,7 @@ async function ip2country(ip: string, ctx: ExecutionContext): Promise<string | n
 	if (cachedResponse) {
 		const country = await cachedResponse.text();
 		updateMemCache(ip, country);
+		STATS.cache.apiHits++;
 		return country;
 	}
 
@@ -1062,6 +1101,7 @@ async function ip2country(ip: string, ctx: ExecutionContext): Promise<string | n
 		log('D1 in error cooldown, skipping geo lookup');
 		return null;
 	}
+	STATS.cache.misses++;
 	let country: string | null = null;
 	try {
 		country = isIPv4(ip) ? await ip2countryIPv4(ip) : await ip2countryIPv6(ip);
