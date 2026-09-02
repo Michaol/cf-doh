@@ -1,7 +1,8 @@
 -- ============================================================
 -- LEGACY FILE - Not used in current CI/CD pipeline
 -- This file was used for manual database merging with MaxMind GeoLite2.
--- Current workflow uses extract_mmdb.py with Loyalsoldier/geoip data.
+-- SUPERSEDED by migrations/0002_merged_pk_schema.sql + merge_mmdb.py
+-- (convergence migration, Phase 2, 2026-09).
 -- Kept for reference purposes only.
 -- ============================================================
 

@@ -6,6 +6,10 @@ This script was used to merge non-target countries into a single
 'OTHER' category to reduce database size. Current workflow uses
 the full Loyalsoldier/geoip dataset without filtering.
 
+SUPERSEDED by migrations/0002_merged_pk_schema.sql + merge_mmdb.py
+(convergence migration, Phase 2, 2026-09): lossless same-country
+run merging replaces lossy country filtering.
+
 Kept for reference purposes only.
 ============================================================
 """

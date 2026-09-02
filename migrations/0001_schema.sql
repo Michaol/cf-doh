@@ -1,5 +1,7 @@
--- GeoIP Database Schema
+-- GeoIP Database Schema (LEGACY - historical only; never applied by CI)
 -- This migration creates the initial table structure for GeoIP data
+-- Superseded by 0002_merged_pk_schema.sql (merged same-country runs,
+-- primary-key layouts, no secondary indexes). Kept for migration history.
 
 DROP TABLE IF EXISTS merged_ipv4_data;
 DROP TABLE IF EXISTS merged_ipv6_data;

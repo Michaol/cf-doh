@@ -2,6 +2,10 @@
 """
 Extract IPv4 and IPv6 data from Country.mmdb (Loyalsoldier format).
 Outputs CSV files compatible with D1 import.
+
+LEGACY (raw per-CIDR extraction, used by the old full-replace import path).
+Superseded for the D1 pipeline by merge_mmdb.py + migrations/0002_merged_pk_schema.sql
+(lossless same-country run merging, primary-key layouts, no secondary indexes).
 """
 
 import argparse
