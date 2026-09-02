@@ -14,6 +14,8 @@ import os
 import sys
 import ipaddress
 
+from pathguard import validated_path
+
 try:
     import maxminddb
 except ImportError:
@@ -66,24 +68,6 @@ def process_network(network, country_code):
     }
 
 
-def _safe_path(path: str, must_exist: bool = False) -> str:
-    """Canonicalize a CLI-supplied path and confine it to the working directory.
-
-    Guards file access against faulty or maliciously crafted arguments
-    (Sonar S8707): rejects NUL bytes, resolves symlinks/'..', and requires
-    the result to stay inside the repository working directory.
-    """
-    if not path or '\x00' in path:
-        raise ValueError(f"invalid path: {path!r}")
-    real = os.path.realpath(path)
-    root = os.path.realpath(os.getcwd())
-    if real != root and not real.startswith(root + os.sep):
-        raise ValueError(f"path escapes the working directory: {path!r}")
-    if must_exist and not os.path.isfile(real):
-        raise FileNotFoundError(f"file not found: {path}")
-    return real
-
-
 def extract_mmdb(mmdb_path: str, ipv4_output: str, ipv6_output: str) -> None:
     """
     Read Country.mmdb and export to two CSV files.
@@ -91,7 +75,7 @@ def extract_mmdb(mmdb_path: str, ipv4_output: str, ipv6_output: str) -> None:
     IPv4 CSV: network,network_start,country_iso_code
     IPv6 CSV: network,network_start,country_iso_code
     """
-    mmdb_path = _safe_path(mmdb_path, must_exist=True)
+    mmdb_path = validated_path(mmdb_path, must_exist=True)
     print(f"Opening {mmdb_path}...")
     
     with maxminddb.open_database(mmdb_path) as reader:
@@ -121,7 +105,7 @@ def extract_mmdb(mmdb_path: str, ipv4_output: str, ipv6_output: str) -> None:
         ipv6_records.sort(key=lambda x: x['network_start'])
         
         # Write IPv4 CSV
-        ipv4_output = _safe_path(ipv4_output)
+        ipv4_output = validated_path(ipv4_output)
         print(f"Writing {ipv4_output}...")
         with open(ipv4_output, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=['network', 'network_start', 'country_iso_code'])
@@ -129,7 +113,7 @@ def extract_mmdb(mmdb_path: str, ipv4_output: str, ipv6_output: str) -> None:
             writer.writerows(ipv4_records)
         
         # Write IPv6 CSV
-        ipv6_output = _safe_path(ipv6_output)
+        ipv6_output = validated_path(ipv6_output)
         print(f"Writing {ipv6_output}...")
         with open(ipv6_output, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=['network', 'network_start', 'country_iso_code'])

@@ -31,23 +31,7 @@ import sys
 
 import maxminddb
 
-
-def validated_path(path, must_exist=False):
-    """Canonicalize a CLI-supplied path and confine it to the working directory.
-
-    Guards every file access against faulty or maliciously crafted arguments
-    (Sonar S8707): no NUL bytes, fully resolved (symlinks/../ collapsed), and
-    required to stay inside the repository working directory.
-    """
-    if not path or '\x00' in path:
-        raise ValueError(f'invalid path: {path!r}')
-    real = os.path.realpath(path)
-    root = os.path.realpath(os.getcwd())
-    if real != root and not real.startswith(root + os.sep):
-        raise ValueError(f'path escapes the working directory: {path!r}')
-    if must_exist and not os.path.isfile(real):
-        raise FileNotFoundError(path)
-    return real
+from pathguard import validated_path
 
 
 def get_country_code(data):
