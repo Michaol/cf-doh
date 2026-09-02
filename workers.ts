@@ -301,9 +301,10 @@ function buildDnsQuery(name: string, type: string): Uint8Array {
 
 	const packet = new Uint8Array(12 + nameLen + 4);
 	const view = new DataView(packet.buffer);
+	const dnsId = crypto.getRandomValues(new Uint16Array(1))[0];
 
 	// Header
-	view.setUint16(0, Math.floor(Math.random() * 65535)); // ID
+	view.setUint16(0, dnsId); // ID
 	view.setUint16(2, 0x0100); // Flags: standard query, recursion desired
 	view.setUint16(4, 1); // QDCOUNT
 	view.setUint16(6, 0); // ANCOUNT
