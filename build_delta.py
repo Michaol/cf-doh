@@ -36,6 +36,24 @@ from merge_mmdb import extract_raw, merge_runs
 MAX_STMT_BYTES = 80_000  # D1 hard limit is 100KB per statement; keep margin
 
 
+def validated_path(path, must_exist=False):
+    """Canonicalize a CLI-supplied path and confine it to the working directory.
+
+    Guards every file access against faulty or maliciously crafted arguments
+    (Sonar S8707): no NUL bytes, fully resolved (symlinks/../ collapsed), and
+    required to stay inside the repository working directory.
+    """
+    if not path or '\x00' in path:
+        raise ValueError(f'invalid path: {path!r}')
+    real = os.path.realpath(path)
+    root = os.path.realpath(os.getcwd())
+    if real != root and not real.startswith(root + os.sep):
+        raise ValueError(f'path escapes the working directory: {path!r}')
+    if must_exist and not os.path.isfile(real):
+        raise FileNotFoundError(path)
+    return real
+
+
 def sql_str(s):
     return "'" + s.replace("'", "''") + "'"
 
@@ -123,14 +141,18 @@ def main():
                    help="meta rows written LAST (repeatable), e.g. --meta source_tag=202608270741")
     args = p.parse_args()
 
-    for path in (args.live_v4, args.live_v6, args.mmdb):
-        if not os.path.isfile(path):
-            print(f'Error: {path} not found', file=sys.stderr)
-            return 1
+    try:
+        live_v4_path = validated_path(args.live_v4, must_exist=True)
+        live_v6_path = validated_path(args.live_v6, must_exist=True)
+        mmdb_path = validated_path(args.mmdb, must_exist=True)
+        out_path = validated_path(args.out)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f'Error: {exc}', file=sys.stderr)
+        return 1
 
-    live4 = load_live(args.live_v4, True)
-    live6 = load_live(args.live_v6, False)
-    target4, target6 = target_dicts(args.mmdb)
+    live4 = load_live(live_v4_path, True)
+    live6 = load_live(live_v6_path, False)
+    target4, target6 = target_dicts(mmdb_path)
 
     up4, del4 = diff_family(live4, target4)
     up6, del6 = diff_family(live6, target6)
@@ -161,7 +183,7 @@ def main():
         meta_pairs.append((k, v))
 
     max_stmt = 0
-    with open(args.out, 'w', encoding='utf-8') as f:
+    with open(out_path, 'w', encoding='utf-8') as f:
         f.write(f'-- convergence delta: {total} rows '
                 f'(upserts {len(up4) + len(up6)}, deletes {len(del4) + len(del6)})\n')
         f.write('-- idempotent; meta rows are written LAST (tag present => apply complete)\n')
@@ -172,8 +194,8 @@ def main():
             f.write(f'INSERT INTO meta (key,value) VALUES {values} '
                     'ON CONFLICT(key) DO UPDATE SET value=excluded.value;\n')
 
-    size = os.path.getsize(args.out)
-    print(f'wrote {args.out}: {size:,} bytes, max statement {max_stmt:,} bytes '
+    size = os.path.getsize(out_path)
+    print(f'wrote {out_path}: {size:,} bytes, max statement {max_stmt:,} bytes '
           f'(limit 100,000), meta rows: {len(meta_pairs)}')
     return 0
 

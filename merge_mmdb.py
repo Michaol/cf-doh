@@ -32,6 +32,24 @@ import sys
 import maxminddb
 
 
+def validated_path(path, must_exist=False):
+    """Canonicalize a CLI-supplied path and confine it to the working directory.
+
+    Guards every file access against faulty or maliciously crafted arguments
+    (Sonar S8707): no NUL bytes, fully resolved (symlinks/../ collapsed), and
+    required to stay inside the repository working directory.
+    """
+    if not path or '\x00' in path:
+        raise ValueError(f'invalid path: {path!r}')
+    real = os.path.realpath(path)
+    root = os.path.realpath(os.getcwd())
+    if real != root and not real.startswith(root + os.sep):
+        raise ValueError(f'path escapes the working directory: {path!r}')
+    if must_exist and not os.path.isfile(real):
+        raise FileNotFoundError(path)
+    return real
+
+
 def get_country_code(data):
     """Extract country code from an MMDB record (same precedence as extract_mmdb.py)."""
     if not data:
@@ -109,12 +127,12 @@ def assert_merged_sane(merged, label, is_v4, expect_count=None):
 
 
 def write_csv(path, merged, is_v4, debug_path=None):
-    with open(path, 'w', newline='', encoding='utf-8') as f:
+    with open(validated_path(path), 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
         for s, _e, c in merged:
             w.writerow([s if is_v4 else format(s, '032x'), c])
     if debug_path:
-        with open(debug_path, 'w', newline='', encoding='utf-8') as f:
+        with open(validated_path(debug_path), 'w', newline='', encoding='utf-8') as f:
             w = csv.writer(f)
             for s, e, c in merged:
                 if is_v4:
@@ -134,12 +152,15 @@ def main():
                    help='also write *.debug.csv including network_end')
     args = p.parse_args()
 
-    if not os.path.isfile(args.mmdb_path):
-        print(f'Error: {args.mmdb_path} not found', file=sys.stderr)
+    try:
+        mmdb_path = validated_path(args.mmdb_path, must_exist=True)
+        out_dir = validated_path(args.out_dir)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f'Error: {exc}', file=sys.stderr)
         return 1
-    os.makedirs(args.out_dir, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
 
-    v4, v6 = extract_raw(args.mmdb_path)
+    v4, v6 = extract_raw(mmdb_path)
     print(f'raw:    v4={len(v4)} v6={len(v6)}')
     assert_raw_sane(v4, 'ipv4-raw')
     assert_raw_sane(v6, 'ipv6-raw')
@@ -149,12 +170,12 @@ def main():
     assert_merged_sane(m4, 'ipv4', True, args.expect_v4_count)
     assert_merged_sane(m6, 'ipv6', False, args.expect_v6_count)
 
-    v4_path = os.path.join(args.out_dir, 'blocks_ipv4_merged.csv')
-    v6_path = os.path.join(args.out_dir, 'blocks_ipv6_merged.csv')
+    v4_path = os.path.join(out_dir, 'blocks_ipv4_merged.csv')
+    v6_path = os.path.join(out_dir, 'blocks_ipv6_merged.csv')
     write_csv(v4_path, m4, True,
-              os.path.join(args.out_dir, 'blocks_ipv4_merged.debug.csv') if args.debug_output else None)
+              os.path.join(out_dir, 'blocks_ipv4_merged.debug.csv') if args.debug_output else None)
     write_csv(v6_path, m6, False,
-              os.path.join(args.out_dir, 'blocks_ipv6_merged.debug.csv') if args.debug_output else None)
+              os.path.join(out_dir, 'blocks_ipv6_merged.debug.csv') if args.debug_output else None)
 
     print(f'merged: v4={len(m4)} (-{100 * (1 - len(m4) / len(v4)):.1f}%) '
           f'v6={len(m6)} (-{100 * (1 - len(m6) / len(v6)):.1f}%) total={len(m4) + len(m6)}')

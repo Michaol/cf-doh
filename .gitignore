@@ -172,8 +172,6 @@ dist
 .wrangler/
 
 tmp
-package-lock.json
-wrangler.toml
 .DS_Store
 
 # Python

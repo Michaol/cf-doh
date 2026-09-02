@@ -60,7 +60,7 @@ MMDB_URL="https://raw.githubusercontent.com/Loyalsoldier/geoip/release/Country.m
 # Run download and pip install in parallel
 (retry_with_backoff wget -q -O Country.mmdb "$MMDB_URL" || retry_with_backoff curl -sSfL -o Country.mmdb "$MMDB_URL") &
 DOWNLOAD_PID=$!
-pip install -q maxminddb &
+pip install -q --only-binary :all: maxminddb==3.1.1 &
 INSTALL_PID=$!
 
 # Wait for both to complete
@@ -143,9 +143,9 @@ fi
 database="geoip_${database_version}_${database_location}"
 echo "Creating D1 database: $database"
 
-npx wrangler d1 create $database --location=$database_location
-npx wrangler d1 execute $database -y --remote --file=dump.sql
-database_id=$(npx wrangler d1 info $database --json | jq --raw-output .uuid)
+npx --no-install wrangler d1 create $database --location=$database_location
+npx --no-install wrangler d1 execute $database -y --remote --file=dump.sql
+database_id=$(npx --no-install wrangler d1 info $database --json | jq --raw-output .uuid)
 
 # Enable read replication
 echo "Enabling read replication..."
@@ -168,11 +168,11 @@ sed -e "s/^database_name =.*/database_name = \"$database\"/" \
 # ============================================================
 echo "Cleaning up old databases..."
 num_databases_retained=3
-npx wrangler d1 list --json | jq ".[].name" --raw-output \
+npx --no-install wrangler d1 list --json | jq ".[].name" --raw-output \
     | grep '^geoip_' | tail -n +$num_databases_retained \
     | while read db; do
         echo "Deleting old database: $db"
-        npx wrangler d1 delete $db -y
+        npx --no-install wrangler d1 delete $db -y
     done
 
 echo "Import complete!"

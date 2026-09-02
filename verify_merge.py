@@ -60,10 +60,10 @@ def main():
         keys, vals = load_merged(csv_path, is_v4)
         rkeys = [r[0] for r in raw]
         rvals = [r[2] for r in raw]
-        sample = random.sample(raw, min(args.boundary_samples, len(raw)))
+        sample = random.sample(raw, min(args.boundary_samples, len(raw)))  # NOSONAR - seeded probes for an equivalence test, not a security context
         probes = ([s for s, _, _ in sample]
                   + [e for _, e, _ in sample]
-                  + [random.getrandbits(bits) for _ in range(args.probes)])
+                  + [random.getrandbits(bits) for _ in range(args.probes)])  # NOSONAR - test probe addresses only
         mismatches = 0
         first = None
         for ip in probes:
