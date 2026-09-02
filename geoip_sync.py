@@ -254,7 +254,9 @@ def probe_check(db, v4csv, v6csv, n_probes=200, seed=11):
 def export_table(db, table, out_csv, is_v4):
     """Keyset-paginated full export (reads only). Returns row count."""
     n = 0
-    cursor = 0 if is_v4 else ''
+    # v4 starts at -1 so the network_start=0 row (0.0.0.0/8) is included;
+    # v6 starts at '' — every 32-hex key sorts after the empty string.
+    cursor = -1 if is_v4 else ''
     with open(validated_path(out_csv), 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
         while True:
