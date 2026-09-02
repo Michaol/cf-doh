@@ -55,6 +55,10 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 V4_TABLE = 'merged_ipv4_data'
 V6_TABLE = 'merged_ipv6_data'
 HEX32_RE = re.compile(r'^[0-9a-f]{32}$')
+DB_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$')
+TAG_RE = re.compile(r'^[0-9A-Za-z_.-]{1,64}$')
+SHA256_RE = re.compile(r'^[0-9a-f]{64}$')
+ALLOWED_TOOLS = ('merge_mmdb.py', 'build_chunks.py')
 EXPORT_PAGE = 10_000  # rows per keyset page (conservative; D1 JSON result limits)
 
 EXIT_OK = 0
@@ -138,12 +142,16 @@ class WranglerD1:
     """Real remote D1 via wrangler (JSON envelope per probe run 2026-09-02)."""
 
     def __init__(self, db):
+        if not DB_NAME_RE.match(db or ''):
+            raise SyncError(f'invalid D1 database name: {db!r}')
         self.db = db
 
     def _execute(self, *args):
         cmd = ['npx', '--no-install', 'wrangler', 'd1', 'execute', self.db,
                '-y', '--remote', '--json', *args]
-        return subprocess.run(cmd, capture_output=True, text=True, cwd=HERE)
+        # self.db is regex-validated in __init__; SQL arguments are built
+        # internally from literal-escaped values (sql_str / HEX32_RE / int).
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=HERE)  # NOSONAR
 
     def query(self, sql):
         proc = self._execute('--command', sql)
@@ -215,7 +223,11 @@ def count_csv(path):
 
 
 def run_tool(script, *args):
-    proc = subprocess.run([sys.executable, os.path.join(HERE, script), *args], cwd=HERE)
+    if script not in ALLOWED_TOOLS:
+        raise SyncError(f'refusing to run tool outside allowlist: {script!r}')
+    # script is allowlisted; args are paths/tags/shas already validated at
+    # the resolve_source / main boundary before reaching here.
+    proc = subprocess.run([sys.executable, os.path.join(HERE, script), *args], cwd=HERE)  # NOSONAR
     if proc.returncode != 0:
         raise SyncError(f'{script} failed (rc={proc.returncode})')
 
@@ -229,7 +241,7 @@ def build_merged(mmdb, work):
 
 def probe_check(db, v4csv, v6csv, n_probes=200, seed=11):
     """Sample exact target keys and run the worker's lookup query against D1."""
-    rng = random.Random(seed)  # seeded: deterministic verification, not security
+    rng = random.Random(seed)  # NOSONAR - seeded probes for deterministic verification, not a security context
     bad = 0
     for csv_path, table, is_v4 in ((v4csv, V4_TABLE, True), (v6csv, V6_TABLE, False)):
         keys = []
@@ -237,7 +249,7 @@ def probe_check(db, v4csv, v6csv, n_probes=200, seed=11):
             for r in csv.reader(f):
                 if r:
                     keys.append((int(r[0]) if is_v4 else r[0], r[1]))
-        for k, expect in rng.sample(keys, min(n_probes // 2, len(keys))):
+        for k, expect in rng.sample(keys, min(n_probes // 2, len(keys))):  # NOSONAR - verification probes only
             lit = str(k) if is_v4 else sql_str(k)
             rows = db.query(f'SELECT country_iso_code FROM {table} '
                             f'WHERE network_start <= {lit} '
@@ -283,21 +295,28 @@ def export_table(db, table, out_csv, is_v4):
 
 def resolve_source(args, work):
     """Return (tag, sha256, mmdb_path): overrides win, else fetch_mmdb.sh."""
+    work = validated_path(work)
     if args.mmdb:
-        if not args.tag:
-            raise SyncError('--mmdb override requires --tag')
-        sha = args.sha256 or file_sha256(args.mmdb)
-        return args.tag, sha, args.mmdb
+        if not args.tag or not TAG_RE.match(args.tag):
+            raise SyncError('--mmdb override requires a valid --tag')
+        mmdb = validated_path(args.mmdb, must_exist=True)
+        sha = args.sha256 or file_sha256(mmdb)
+        if not SHA256_RE.match(sha):
+            raise SyncError(f'invalid sha256: {sha!r}')
+        return args.tag, sha, mmdb
+    if args.tag and not TAG_RE.match(args.tag):
+        raise SyncError(f'invalid release tag: {args.tag!r}')
     cmd = [os.path.join(HERE, 'fetch_mmdb.sh'), work]
     if args.tag:
         cmd.append(args.tag)
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=HERE)
+    # cmd = fixed repo script + validated work dir + regex-validated tag.
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=HERE)  # NOSONAR
     if proc.returncode != 0:
         raise SyncError(f'fetch_mmdb.sh failed: {proc.stderr[-400:]}')
     parts = proc.stdout.strip().split()
-    if len(parts) != 3:
+    if len(parts) != 3 or not TAG_RE.match(parts[0]) or not SHA256_RE.match(parts[1]):
         raise SyncError(f'unexpected fetch_mmdb output: {proc.stdout[:200]!r}')
-    return parts[0], parts[1], parts[2]
+    return parts[0], parts[1], validated_path(parts[2], must_exist=True)
 
 
 # ------------------------------------------------------------ state machine
