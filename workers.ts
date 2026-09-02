@@ -77,6 +77,11 @@ const STATS = {
 	startTime: Date.now(),
 };
 
+// D1 error cooldown: after a geo lookup failure, skip D1 for a short window
+// instead of hammering a quota-exhausted / deleted / blocked database.
+let d1_error_until = 0;
+const D1_ERROR_COOLDOWN_MS = 30_000;
+
 function log(...args: any[]) {
 	if (DEBUG) {
 		console.log(...args);
@@ -171,6 +176,16 @@ function handleCors(response: Response): Response {
 // ============================================================
 
 async function handleHealth(): Promise<Response> {
+	// Real connectivity probe: binding-exists is not the same as queryable
+	let database = 'disconnected';
+	if (geoip_db) {
+		try {
+			await geoip_db.prepare('SELECT 1;').run();
+			database = Date.now() < d1_error_until ? 'cooldown' : 'connected';
+		} catch {
+			database = 'error';
+		}
+	}
 	const status = {
 		status: 'ok',
 		timestamp: new Date().toISOString(),
@@ -185,7 +200,7 @@ async function handleHealth(): Promise<Response> {
 			},
 			ttlSeconds: CACHE_TTL_SECONDS,
 		},
-		database: geoip_db ? 'connected' : 'disconnected',
+		database,
 	};
 	return new Response(JSON.stringify(status, null, 2), {
 		headers: { 'Content-Type': 'application/json' },
@@ -372,12 +387,13 @@ async function handleDebugIp(ip: string, ctx: ExecutionContext): Promise<Respons
 async function handleDoH(request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const params = url.pathname.substring(1).split('/');
 
-	// Extract parameters
-	const clientIp = env.connectingIp || extractParam(params, 'client-ip') || request.headers.get('cf-connecting-ip');
+	// Extract parameters (validate IP formats: an invalid value is dropped to
+	// "no value" here instead of throwing inside createOptRecord and 500ing)
+	const clientIp = parseValidIp(env.connectingIp || extractParam(params, 'client-ip') || request.headers.get('cf-connecting-ip'));
 	const clientCountry = env.connectingIpCountry || extractParam(params, 'client-country') || request.headers.get('cf-ipcountry');
 
 	// Alternative IP: from URL param, or fall back to client IP (for simplified URL)
-	const alternativeIp = parseAlternativeIp(params, clientIp);
+	const alternativeIp = parseValidIp(parseAlternativeIp(params, clientIp)) ?? clientIp;
 
 	// Parse DNS query
 	const queryResult = await parseDnsQuery(request, url);
@@ -413,18 +429,38 @@ async function handleDoH(request: Request, url: URL, env: Env, ctx: ExecutionCon
 	}
 
 	const queryUpstreamStart = Date.now();
-	const [clientResult, altResult] = await Promise.all([queryDnsWithIp(clientIp, 'Client IP'), queryDnsWithIp(alternativeIp, 'Alt IP')]);
+	// allSettled: one failing branch must not discard the other's usable answer
+	const [clientSettled, altSettled] = await Promise.allSettled([
+		queryDnsWithIp(clientIp, 'Client IP'),
+		queryDnsWithIp(alternativeIp, 'Alt IP'),
+	]);
 	const queryUpstreamEnd = Date.now();
 
 	log(`Query Upstream Time: ${queryUpstreamEnd - queryUpstreamStart}ms`);
 
+	const clientResult = clientSettled.status === 'fulfilled' ? clientSettled.value : null;
+	const altResult = altSettled.status === 'fulfilled' ? altSettled.value : null;
+	if (clientSettled.status === 'rejected') {
+		STATS.errors++;
+		log(`Client IP query failed: ${(clientSettled.reason as Error)?.message}`);
+	}
+	if (altSettled.status === 'rejected') {
+		STATS.errors++;
+		log(`Alt IP query failed: ${(altSettled.reason as Error)?.message}`);
+	}
+	if (!clientResult && !altResult) {
+		return new Response('All query paths failed', { status: 502 });
+	}
+
 	// Client country exact match takes highest priority
-	if (clientCountry && clientResult.country === clientCountry) {
+	if (clientResult && clientCountry && clientResult.country === clientCountry) {
 		log(`Selected: Client IP response (exact country match: ${clientCountry})`);
 		return clientResult.response;
 	}
 
-	// Otherwise, select by priority list
+	// Otherwise select by priority list; fall back to the surviving branch
+	if (!altResult) return clientResult!.response;
+	if (!clientResult) return altResult.response;
 	if (clientResult.priority <= altResult.priority) {
 		log(`Selected: Client IP response (priority: ${clientResult.priority} vs ${altResult.priority})`);
 		return clientResult.response;
@@ -445,6 +481,15 @@ function extractParam(params: string[], name: string): string | null {
 		return params[index + 1] ?? null;
 	}
 	return null;
+}
+
+/**
+ * Return the IP if it is a valid IPv4/IPv6 address, otherwise null.
+ * Keeps user-supplied garbage from reaching createOptRecord (which throws).
+ */
+function parseValidIp(ip: string | null | undefined): string | null {
+	if (!ip) return null;
+	return isIPv4(ip) || isIPv6(ip) ? ip : null;
 }
 
 /**
@@ -949,11 +994,21 @@ async function ip2country(ip: string, ctx: ExecutionContext): Promise<string | n
 	}
 
 	// L3: D1 Database Query
+	if (Date.now() < d1_error_until) {
+		log('D1 in error cooldown, skipping geo lookup');
+		return null;
+	}
 	let country: string | null = null;
-	if (isIPv4(ip)) {
-		country = await ip2countryIPv4(ip);
-	} else {
-		country = await ip2countryIPv6(ip);
+	try {
+		country = isIPv4(ip) ? await ip2countryIPv4(ip) : await ip2countryIPv6(ip);
+	} catch (err) {
+		// D1 errors (read-quota exhaustion, DB deleted, timeout, ingest block)
+		// degrade to "no geo info"; they must never 500 the whole request.
+		const error = err as Error;
+		STATS.errors++;
+		d1_error_until = Date.now() + D1_ERROR_COOLDOWN_MS;
+		log(`D1 geo lookup failed (cooldown ${D1_ERROR_COOLDOWN_MS}ms): ${error.message}`);
+		return null;
 	}
 
 	if (country) {
