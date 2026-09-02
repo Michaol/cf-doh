@@ -91,21 +91,22 @@ def emit_batches(f, head, tail, pieces):
 
 
 def emit_family(f, table, is_v4, upserts, deletes):
+    # Keys sort deterministically within each family: v4 ints numerically,
+    # v6 fixed-width lowercase hex lexicographically (== numerically).
     max_stmt = 0
     if deletes:
         max_stmt = max(max_stmt, emit_batches(
             f,
             f"DELETE FROM {table} WHERE network_start IN (",
             ");",
-            (key_literal(k, is_v4) for k in sorted(deletes, key=(lambda x: x) if is_v4 else str)),
+            (key_literal(k, is_v4) for k in sorted(deletes)),
         ))
     if upserts:
         max_stmt = max(max_stmt, emit_batches(
             f,
             f"INSERT INTO {table} (network_start,country_iso_code) VALUES ",
             " ON CONFLICT(network_start) DO UPDATE SET country_iso_code=excluded.country_iso_code;",
-            (f"({key_literal(k, is_v4)},{sql_str(c)})"
-             for k, c in sorted(upserts.items(), key=(lambda kv: kv[0]) if is_v4 else str(kv[0]))),
+            (f"({key_literal(k, is_v4)},{sql_str(c)})" for k, c in sorted(upserts.items())),
         ))
     return max_stmt
 
