@@ -143,7 +143,7 @@ fi
 database="geoip_${database_version}_${database_location}"
 echo "Creating D1 database: $database"
 
-npx wrangler d1 create $database --location=$database_location || true
+npx wrangler d1 create $database --location=$database_location
 npx wrangler d1 execute $database -y --remote --file=dump.sql
 database_id=$(npx wrangler d1 info $database --json | jq --raw-output .uuid)
 
@@ -172,7 +172,7 @@ npx wrangler d1 list --json | jq ".[].name" --raw-output \
     | grep '^geoip_' | tail -n +$num_databases_retained \
     | while read db; do
         echo "Deleting old database: $db"
-        npx wrangler d1 delete $db -y || true
+        npx wrangler d1 delete $db -y
     done
 
 echo "Import complete!"

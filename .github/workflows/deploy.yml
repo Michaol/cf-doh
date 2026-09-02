@@ -1,13 +1,34 @@
 name: Deploy to Cloudflare Workers
 
+# Phase 0 (2026-09-02): the weekly Tuesday schedule is DISABLED.
+# The full-replace GeoIP import writes ~1.95M rows per run (19.5x the D1 free
+# daily quota of 100k) and has hard-failed since Cloudflare's 2026-09-01
+# enforcement change, leaking one orphan database per failed run.
+# Data updates will resume via the daily convergence job (migration plan,
+# Phase 3-5); until then this workflow is manual-only.
+
 on:
-  schedule:
-    - cron: '30 10 * * 2' # Every Tuesday at 10:30 UTC
   workflow_dispatch:
+    inputs:
+      mode:
+        description: >-
+          worker-only: deploy the Worker with the current wrangler.toml binding.
+          full: legacy GeoIP full-replace import + deploy (fails the D1 free
+          quota; keep only for emergencies under a paid plan).
+        type: choice
+        options:
+          - worker-only
+          - full
+        default: worker-only
+
+concurrency:
+  group: geoip-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: write
     steps:
@@ -18,6 +39,7 @@ jobs:
           node-version: '20'
 
       - uses: actions/setup-python@v5
+        if: inputs.mode == 'full'
         with:
           python-version: '3.11'
 
@@ -26,21 +48,25 @@ jobs:
         with:
           path: ~/.npm
           key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
-          restore-keys: ${{ runner.os }}-npm-
+          restore-keys: |
+            ${{ runner.os }}-npm-
 
       - name: Cache pip dependencies
+        if: inputs.mode == 'full'
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-maxminddb
-          restore-keys: ${{ runner.os }}-pip-
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: |
-          npm install
-          pip install maxminddb
+          npm ci
+          if [ "${{ inputs.mode }}" = "full" ]; then pip install maxminddb; fi
 
-      - name: Import GeoIP data and deploy
+      - name: Import GeoIP data (legacy full-replace; quota-failing on free plan)
+        if: inputs.mode == 'full'
         run: ./import-geoip.sh
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -48,6 +74,7 @@ jobs:
           WORKERS_DEV: 'true'
 
       - name: Move wrangler config
+        if: inputs.mode == 'full'
         run: mv tmp/wrangler.toml .
 
       - name: Deploy Worker
@@ -57,6 +84,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
       - name: Update release branch
+        if: inputs.mode == 'full'
         run: |
           mkdir release && cd release
           DATE=$(date)
@@ -69,3 +97,30 @@ jobs:
           git commit -m "$DATE"
           git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
           git push -f -u origin release
+
+      - name: Ping dead-man switch
+        run: |
+          if [ -n "$HC_URL" ]; then
+            curl -fsS --retry 3 "$HC_URL" || true
+          fi
+        env:
+          HC_URL: ${{ secrets.HEALTHCHECK_PING_URL }}
+
+  notify-failure:
+    needs: deploy
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open a failure issue (deduplicated)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OPEN_COUNT=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open --json number --jq length)
+          if [ "$OPEN_COUNT" = "0" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "CI failure: $GITHUB_WORKFLOW run #$GITHUB_RUN_NUMBER" \
+              --label ci-failure \
+              --body "Workflow run failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          fi
