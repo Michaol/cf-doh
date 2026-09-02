@@ -32,30 +32,8 @@ import os
 import sys
 
 from merge_mmdb import extract_raw, merge_runs
-
-MAX_STMT_BYTES = 80_000  # D1 hard limit is 100KB per statement; keep margin
-
-
-def validated_path(path, must_exist=False):
-    """Canonicalize a CLI-supplied path and confine it to the working directory.
-
-    Guards every file access against faulty or maliciously crafted arguments
-    (Sonar S8707): no NUL bytes, fully resolved (symlinks/../ collapsed), and
-    required to stay inside the repository working directory.
-    """
-    if not path or '\x00' in path:
-        raise ValueError(f'invalid path: {path!r}')
-    real = os.path.realpath(path)
-    root = os.path.realpath(os.getcwd())
-    if real != root and not real.startswith(root + os.sep):
-        raise ValueError(f'path escapes the working directory: {path!r}')
-    if must_exist and not os.path.isfile(real):
-        raise FileNotFoundError(path)
-    return real
-
-
-def sql_str(s):
-    return "'" + s.replace("'", "''") + "'"
+from pathguard import validated_path
+from sqlbatch import iter_batches, sql_str
 
 
 def load_live(path, is_v4):
@@ -89,22 +67,9 @@ def key_literal(k, is_v4):
 def emit_batches(f, head, tail, pieces):
     """Write multi-row statements, splitting on a byte budget. Returns max stmt bytes."""
     max_bytes = 0
-    batch, size = [], len(head) + len(tail)
-
-    def flush():
-        nonlocal batch, size, max_bytes
-        if batch:
-            stmt = head + ",".join(batch) + tail
-            max_bytes = max(max_bytes, len(stmt))
-            f.write(stmt + "\n")
-            batch, size = [], len(head) + len(tail)
-
-    for piece in pieces:
-        if batch and size + len(piece) + 1 > MAX_STMT_BYTES:
-            flush()
-        batch.append(piece)
-        size += len(piece) + 1
-    flush()
+    for stmt in iter_batches(head, tail, pieces):
+        f.write(stmt + "\n")
+        max_bytes = max(max_bytes, len(stmt))
     return max_bytes
 
 
