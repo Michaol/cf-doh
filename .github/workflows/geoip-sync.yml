@@ -54,6 +54,10 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # fetch_mmdb.sh uses this for the GitHub API tag lookup: runner IPs
+          # are shared, and unauthenticated API calls (60/h per IP) can hit
+          # rate limits; a token raises that to 5000/h.
+          GITHUB_TOKEN: ${{ github.token }}
           CHUNKS: ${{ inputs.chunks_per_run || 1 }}
         run: python3 geoip_sync.py --db geoip_live_weur --chunks-per-run "$CHUNKS"
 
