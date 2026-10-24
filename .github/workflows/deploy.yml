@@ -117,7 +117,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh label create ci-failure --color B60205 --description "CI pipeline failure" 2>/dev/null || true
+          gh label create ci-failure --repo "$GITHUB_REPOSITORY" --color B60205 --description "CI pipeline failure" 2>/dev/null || true
           OPEN_COUNT=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open --json number --jq length)
           if [ "$OPEN_COUNT" = "0" ]; then
             gh issue create --repo "$GITHUB_REPOSITORY" \

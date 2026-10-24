@@ -46,6 +46,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 from pathguard import validated_path
@@ -60,6 +61,10 @@ TAG_RE = re.compile(r'^[0-9A-Za-z_.-]{1,64}$')
 SHA256_RE = re.compile(r'^[0-9a-f]{64}$')
 ALLOWED_TOOLS = ('merge_mmdb.py', 'build_chunks.py')
 EXPORT_PAGE = 10_000  # rows per keyset page (conservative; D1 JSON result limits)
+# wrangler/d1 execute can die mid-pagination on a transient API blip (observed
+# 2026-10-23: non-zero rc, empty stderr). Retry a few times; SQL is idempotent.
+WRANGLER_ATTEMPTS = 3
+WRANGLER_RETRY_SLEEP = 2.0
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -151,24 +156,41 @@ class WranglerD1:
                '-y', '--remote', '--json', *args]
         # self.db is regex-validated in __init__; SQL arguments are built
         # internally from literal-escaped values (sql_str / HEX32_RE / int).
-        return subprocess.run(cmd, capture_output=True, text=True, cwd=HERE)  # NOSONAR
+        proc = None
+        for attempt in range(1, WRANGLER_ATTEMPTS + 1):
+            proc = subprocess.run(cmd, capture_output=True, text=True, cwd=HERE)  # NOSONAR
+            if proc.returncode == 0:
+                return proc
+            if attempt < WRANGLER_ATTEMPTS:
+                print(f'wrangler rc={proc.returncode}, retry {attempt}/{WRANGLER_ATTEMPTS}',
+                      file=sys.stderr)
+                time.sleep(WRANGLER_RETRY_SLEEP * attempt)
+        return proc
+
+    @staticmethod
+    def _fail(kind, detail, proc):
+        # wrangler may report the real error on either stream; 2026-10-23
+        # failure had empty stderr only. Keep both tails.
+        err = (proc.stderr or '')[-400:]
+        out = (proc.stdout or '')[-400:]
+        raise SyncError(f'{kind}: {detail}\nrc={proc.returncode} stderr={err!r} stdout={out!r}')
 
     def query(self, sql):
         proc = self._execute('--command', sql)
         if proc.returncode != 0:
-            raise SyncError(f'query failed: {sql[:160]}\n{proc.stderr[-600:]}')
+            self._fail('query failed', sql[:160], proc)
         data = json.loads(strip_noise(proc.stdout))
         return (data[0].get('results') or []) if data else []
 
     def execute_sql(self, sql):
         proc = self._execute('--command', sql)
         if proc.returncode != 0:
-            raise SyncError(f'execute failed: {sql[:160]}\n{proc.stderr[-600:]}')
+            self._fail('execute failed', sql[:160], proc)
 
     def execute_file(self, path):
         proc = self._execute('--file', path)
         if proc.returncode != 0:
-            raise SyncError(f'file apply failed: {path}\n{proc.stderr[-600:]}')
+            self._fail('file apply failed', path, proc)
 
     def table_exists(self, name):
         rows = self.query(f"SELECT name FROM sqlite_master WHERE type='table' AND name={sql_str(name)}")
@@ -184,7 +206,7 @@ class WranglerD1:
                               capture_output=True, text=True, cwd=HERE)
         m = re.search(r'"bookmark"\s*:\s*"([^"]+)"', proc.stdout + proc.stderr)
         if proc.returncode != 0 or not m:
-            raise SyncError(f'time-travel info failed: {proc.stderr[-400:]}')
+            self._fail('time-travel info failed', self.db, proc)
         return m.group(1)
 
     def restore(self, bookmark):
@@ -193,7 +215,7 @@ class WranglerD1:
                                '--bookmark', bookmark, '-y'],
                               capture_output=True, text=True, cwd=HERE)
         if proc.returncode != 0:
-            raise SyncError(f'time-travel restore failed: {proc.stderr[-400:]}')
+            self._fail('time-travel restore failed', self.db, proc)
 
     def close(self):
         pass
