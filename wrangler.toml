@@ -7,5 +7,5 @@ preview_urls = false
 
 [[d1_databases]]
 binding = "geolite2_country"
-database_name = "geoip_20260901_weur"
-database_id = "49af07f7-8c2b-4196-9746-24dd0e6d4342"
+database_name = "geoip_live_weur"
+database_id = "8e526c06-9903-4728-8080-87d5c266ab2d"
