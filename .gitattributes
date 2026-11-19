@@ -1,0 +1,11 @@
+# Normalize line endings: scripts and CI configs must stay LF everywhere
+# (Windows dev machines run core.autocrlf=true; bash on runners needs LF).
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.sql text eol=lf
+*.ts text eol=lf
+*.md text eol=lf
+*.png binary
+*.mmdb binary

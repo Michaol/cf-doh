@@ -60,9 +60,8 @@ python3 geoip_sync.py --db geoip_live_weur --tag 202608270741
 2. `python3 build_chunks.py --v4-csv tmp/rebuild/blocks_ipv4_merged.csv --v6-csv tmp/rebuild/blocks_ipv6_merged.csv --tag <tag> --sha256 <sha> --out-dir tmp/rebuild/chunks`
 3. 对**新建库** `geoip_rebuild_<tag>`（`wrangler d1 create` + 应用 0002）每天应用一个
    chunk（`wrangler d1 execute <db> -y --remote --file=chunk_NNN.sql`），7 天完成；
-4. 全量对账通过后，把 wrangler.toml 的 `database_id` 指向新库并 `npm run deploy`
-   （原子切换），旧库保留一个周期作冷回滚，随后按名删除。
-   或：升级 Workers Paid（$5/月，50M 行写入/月）后单次完成。
+4. 全量对账通过后切换绑定（见 §3.8 的一键切换），旧库保留一个周期作冷回滚，
+   随后按名删除。或：升级 Workers Paid（$5/月，50M 行写入/月）后单次完成。
 
 ### 3.5 定时任务被 GitHub 自动停用（60 天无活动规则）
 Settings → Actions → General → 重新启用 workflow。检测手段是 dead-man 告警
@@ -83,6 +82,31 @@ Variables and Secrets 添加 Secret `DEBUG_TOKEN`（或 `wrangler secret put DEB
 请求时携带 `x-debug-token: <值>` 头。未认证时该端点可被用作地理查询预言机，
 消耗账户级 5M rows_read/天 配额，请勿公开令牌。
 
+### 3.8 P4 绑定切换（一键，带前置校验）
+Actions → "Deploy to Cloudflare Workers" → Run workflow：mode=`worker-only`，
+勾选 `cutover_live`。工作流会：
+1. 解析 `geoip_live_weur` 的 uuid；
+2. 查询 `meta.source_tag` 必须存在（同步作业最后才写 tag ⇒ 数据已全量应用并校验）；
+3. 改写 wrangler.toml 绑定 → 部署 → 把新绑定提交回仓库（持久化，防后续部署回退）。
+任一校验失败即拒绝切换。切换后旧库保留一个周期作冷回滚，再按 §3.6 按名删除。
+
+### 3.9 限流与配额保护
+- Worker 内置**尽力而为**的每源 IP 令牌桶（`RATE_LIMIT_PER_10S`，默认 100/10s，
+  作用于 DoH 与 /resolve；/health、/stats 不受限）。按 isolate 内存计，零成本、
+  无付费绑定；跨 colo 不共享，不能替代边缘限流。
+- 需要硬保证时：Cloudflare Dashboard → Security → WAF → Rate limiting rules，
+  对 `/dns-query`、`/resolve` 路径按源 IP 限速（免费计划含 1 条速率限制规则，
+  以控制台实际可用性为准）。
+- 免费层天然上限：Workers 免费 100k 请求/天 ⇒ 经 Worker 的 D1 地理读 ≤ ~200k/天，
+  远低于 5M rows_read/天；single-flight 与两级缓存进一步压低实际值。
+
+### 3.10 回归测试
+`npm test`（= `python tests/run_all.py`）离线跑全量回归：tsc 类型检查、
+管线四态（引导/校验/收敛/闸门）+ 漂移自愈 + 原子回滚 + 安全守卫、
+Worker 端点 30 用例（含 ID 重写、TTL 老化、single-flight、限流 429）。
+CI "Offline Tests" 工作流在相关 push/PR 自动执行（ubuntu-26.04 + Node 22）。
+改动 workers.ts / dns.ts / ip.ts / 管线 / schema 后必须全绿再部署。
+
 ## 4. 变更数据管线的守则
 
 - DDL 只有一处：`migrations/0002_merged_pk_schema.sql`。改表 = 新 migration + 更新
@@ -93,11 +117,15 @@ Variables and Secrets 添加 Secret `DEBUG_TOKEN`（或 `wrangler secret put DEB
 - Worker 端查询（`WHERE network_start <= ? ORDER BY network_start DESC LIMIT 1`）
   与 schema 的等价性由 240k+ 探针验证保障，改任一侧都要重跑。
 
-## 5. 未决事项（详见审查报告，2026-09-02）
+## 5. 未决事项（2026-11-19 复核更新）
 
 - time-travel 的确切 JSON envelope 与 restore 是否计 rows_written：未在本账户实测
   （收敛正确性不依赖它——delta 幂等，仅影响自动回滚的便利性）。
 - Loyalsoldier 历史 release 资产的长期可用性：仅验证近 4 个 tag；`meta` 已记录全部
   应用过的 tag+sha，资产 404 时以线上导出为基线恢复。
-- 安全待办（独立立项）：未认证 `/debug/ip` 与 client-ip/alternative-ip 参数面可消耗
-  5M rows_read/天 配额（2026-09-01 起读超限同样硬失败）；建议限流或加鉴权。
+- ~~安全待办：未认证 /debug/ip 与 client-ip 参数面配额消耗~~ **已关闭**：
+  /debug/ip 令牌门控（默认 404）；DoH//resolve 每源 IP 令牌桶限流（§3.9）；
+  verify-only 漂移自动收敛自愈；SERVFAIL 不再被缓存固化。
+- **P4 切换待执行**：wrangler.toml 目前仍绑定 legacy 库 `geoip_20260901_weur`
+  （2026-09-01 数据）。`geoip_live_weur` 已收敛就绪——按 §3.8 一键切换后，
+  每日同步的新数据才真正被 Worker 消费。切换完成前这是最大的数据新鲜度缺口。

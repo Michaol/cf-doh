@@ -1,0 +1,62 @@
+name: Offline Tests
+
+# Full offline regression: typecheck + sync-pipeline state machine + worker
+# endpoint battery. No Cloudflare credentials needed — D1 is the local
+# miniflare stand-in; only public DNS upstreams and GitHub releases are used.
+
+on:
+  push:
+    paths:
+      - 'workers.ts'
+      - 'dns.ts'
+      - 'ip.ts'
+      - '*.py'
+      - 'tests/**'
+      - 'migrations/**'
+      - 'package-lock.json'
+      - '.github/workflows/offline-tests.yml'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: offline-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          npm ci --ignore-scripts
+          pip install --only-binary :all: maxminddb==3.1.1
+
+      - name: Fetch two pinned mmdb releases (bootstrap + converge targets)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ./fetch_mmdb.sh tmp/mm
+          PREV=$(curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            'https://api.github.com/repos/Loyalsoldier/geoip/releases?per_page=2' | jq -r '.[1].tag_name')
+          if [[ -n "$PREV" && "$PREV" != "null" ]]; then
+            ./fetch_mmdb.sh tmp/mm "$PREV"
+          fi
+
+      - name: Run offline regression
+        run: python tests/run_all.py

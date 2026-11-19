@@ -57,6 +57,7 @@
 1. **启用工作流**: 进入仓库的 **Actions** 标签页，如有提示请启用工作流。
 2. **部署 Worker**: 从 **Actions** 标签页手动触发 "Deploy to Cloudflare Workers"（mode 选 `worker-only`）。
 3. **GeoIP 数据**: 由 "GeoIP Daily Sync" 工作流每天 10:45 UTC 自动维护——首次运行会创建 `geoip_live_weur` 并按每日配额分块引导数据（约 7 天），之后以增量方式收敛到 Loyalsoldier 最新 release（无新 release 时零写入）。详见 [RUNBOOK.md](RUNBOOK.md)。
+4. **P4 切换（一次性）**: 引导完成后，手动触发 "Deploy to Cloudflare Workers"，mode 选 `worker-only` 并勾选 `cutover_live`——工作流会先验证 `geoip_live_weur` 的 `meta.source_tag` 存在（引导完成且校验通过），再把绑定切换过去、部署并把新绑定提交回仓库。
 
 ## 配置
 
@@ -73,6 +74,9 @@ Worker 主要通过上述定义的 **GitHub Secrets** 进行配置。
 | `DEBUG`              | `false`             | 启用详细日志（设置为 `true` 启用）  |
 | `DEBUG_TOKEN`        | （未设置）          | `/debug/ip/` 端点访问令牌；未设置时该端点一律返回 404（默认关闭） |
 | `COUNTRY_PRIORITY`   | `CN,HK,TW,JP,SG,US` | 路由的国家优先级，逗号分隔          |
+| `FORCE_AD`           | `true`              | 向上游强制 AD=1（请求 DNSSEC 验证）；设为 `false` 保留客户端自己的 AD 位 |
+| `RATE_LIMIT_PER_10S` | `100`               | 每源 IP 每 10 秒的请求预算（DoH 与 /resolve；尽力而为、按 isolate 内存计）；`0` 关闭 |
+| `connectingIp` / `connectingIpCountry` | （未设置） | **仅调试**：强制覆盖用于 ECS/路由的客户端 IP/国家。生产环境切勿设置 |
 
 **wrangler.toml 示例:**
 
@@ -96,7 +100,8 @@ COUNTRY_PRIORITY = "CN,HK,TW,JP,SG,US"
 GET https://<your-worker-domain>/resolve?name=example.com&type=A
 ```
 
-返回兼容 Google DNS JSON API 的响应。
+返回兼容 Google DNS JSON API 的响应（`Status` 为真实 RCODE：NXDOMAIN=3 等）。
+仅支持 `A` 与 `AAAA` 两种类型，其余类型返回 400；国际化域名请先转为 punycode（xn--）。
 
 ### 健康检查
 
@@ -131,13 +136,27 @@ DoH 端点接受以下格式的请求：
 | :--------------- | :---------------------------------------- | :--- | :----------------------------------- |
 | `client-ip`      | 客户端的真实 IP 地址。                    | 否   | URL 路径 > `CF-Connecting-IP` 请求头 |
 | `client-country` | 客户端的 2 字母 ISO 国家代码。            | 否   | URL 路径 > `CF-IPCountry` 请求头     |
-| `alternative-ip` | 用于二次解析的 IP 地址（例如 VPN 出口）。 | 是   | URL 路径                             |
+| `alternative-ip` | 用于二次解析的 IP 地址（例如 VPN 出口）。 | 否   | URL 路径；缺省回退到 client-ip       |
 
 ### 示例
 
 ```bash
 curl "https://doh.subdomain.workers.dev/client-ip/223.5.5.5/client-country/CN/alternative-ip/8.8.8.8/dns-query?dns=<BASE64_DNS_QUERY>"
 ```
+
+## 本地开发与测试
+
+```bash
+npm install
+npm run typecheck   # tsc --noEmit
+npm test            # 离线全量回归：类型检查 + 管线状态机 + Worker 端点实测
+```
+
+`npm test`（即 `python tests/run_all.py`）不需要任何 Cloudflare 凭据：D1 用本地
+miniflare 替身（自动应用 migrations/0002 + tests/seed.sql），Worker 跑在
+`wrangler dev` 本地模式。管线数据测试需要 `tmp/mm/*.mmdb`（Loyalsoldier
+Country.mmdb，两个不同 tag 可覆盖收敛/闸门路径；缺失时自动跳过）。
+CI 的 "Offline Tests" 工作流在每次相关 push/PR 时自动执行同一套件。
 
 ## 贡献
 

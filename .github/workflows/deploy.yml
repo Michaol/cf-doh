@@ -20,6 +20,13 @@ on:
           - worker-only
           - full
         default: worker-only
+      cutover_live:
+        description: >-
+          P4 cutover (worker-only mode): verify geoip_live_weur bootstrap is
+          complete, bind it in wrangler.toml, deploy, and commit the binding
+          back to the repository. One-time switch from the legacy dated DB.
+        type: boolean
+        default: false
 
 concurrency:
   group: geoip-deploy
@@ -27,7 +34,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: write
@@ -36,7 +43,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
 
       - uses: actions/setup-python@v7
         if: inputs.mode == 'full'
@@ -75,7 +82,32 @@ jobs:
 
       - name: Move wrangler config
         if: inputs.mode == 'full'
-        run: mv tmp/wrangler.toml .
+        run: mv tmp/legacy_import/wrangler.toml .
+
+      - name: P4 cutover — bind geoip_live_weur (verified)
+        if: inputs.cutover_live && inputs.mode == 'worker-only'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          UUID=$(npx --no-install wrangler d1 info geoip_live_weur --json | jq -r '.uuid // empty')
+          if [[ -z "$UUID" ]]; then
+            echo "Could not resolve geoip_live_weur uuid — refusing cutover" >&2
+            exit 1
+          fi
+          # Bootstrap must be complete: meta.source_tag present => whole dataset
+          # applied and verified (the sync job writes it LAST).
+          TAG=$(npx --no-install wrangler d1 execute geoip_live_weur -y --remote --json \
+            --command "SELECT value FROM meta WHERE key='source_tag'" \
+            | jq -r '.[0].results[0].value // empty')
+          if [[ -z "$TAG" ]]; then
+            echo "geoip_live_weur bootstrap not complete (no meta.source_tag) — refusing cutover" >&2
+            exit 1
+          fi
+          echo "Cutover: geoip_live_weur uuid=$UUID source_tag=$TAG"
+          sed -i -e "s/^database_name =.*/database_name = \"geoip_live_weur\"/" \
+                 -e "s/^database_id =.*/database_id = \"$UUID\"/" wrangler.toml
 
       - name: Deploy Worker
         run: npm run deploy
@@ -83,8 +115,23 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
+      - name: Persist cutover binding to repository
+        if: inputs.cutover_live && inputs.mode == 'worker-only'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add wrangler.toml
+          if git diff --cached --quiet; then
+            echo "Binding already current — nothing to persist"
+          else
+            git commit -m "ci: P4 cutover — bind geoip_live_weur (bootstrap verified before deploy)"
+            git push
+          fi
+
       - name: Update release branch
         if: inputs.mode == 'full'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir release && cd release
           DATE=$(date)
@@ -95,8 +142,11 @@ jobs:
           git checkout -b release
           git add -A
           git commit -m "$DATE"
-          git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
-          git push -f -u origin release
+          # Token travels in an auth header, never in the remote URL (git
+          # error output echoes URLs; Sonar S6505-class credential leak).
+          git remote add origin "https://github.com/${{ github.repository }}"
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c http.extraheader="Authorization: Basic $AUTH" push -f -u origin release
 
       - name: Ping dead-man switch
         run: |
@@ -109,7 +159,7 @@ jobs:
   notify-failure:
     needs: deploy
     if: failure()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       issues: write
     steps:

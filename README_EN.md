@@ -57,6 +57,7 @@ The deployment workflows:
 1. **Enable Workflows**: Go to the **Actions** tab in your repository and enable workflows if asked.
 2. **Deploy the Worker**: Manually trigger "Deploy to Cloudflare Workers" from the **Actions** tab (mode: `worker-only`).
 3. **GeoIP Data**: Maintained automatically by the "GeoIP Daily Sync" workflow (daily at 10:45 UTC) — the first run creates `geoip_live_weur` and trickles the data in via quota-sized chunks (~7 days), then keeps it converged to the latest Loyalsoldier release with gated deltas (zero writes when nothing changed). See [RUNBOOK.md](RUNBOOK.md).
+4. **P4 Cutover (one-time)**: Once bootstrap completes, manually trigger "Deploy to Cloudflare Workers" with mode `worker-only` and `cutover_live` checked — the workflow verifies `geoip_live_weur` has `meta.source_tag` (bootstrap complete and verified), switches the binding, deploys, and commits the new binding back to the repository.
 
 ## Configuration
 
@@ -73,6 +74,9 @@ These variables can be set in `wrangler.toml` or Cloudflare Dashboard to customi
 | `DEBUG`              | `false`             | Enable verbose logging (`true` to enable)    |
 | `DEBUG_TOKEN`        | (unset)             | Access token for `/debug/ip/`; when unset the endpoint always returns 404 (closed by default) |
 | `COUNTRY_PRIORITY`   | `CN,HK,TW,JP,SG,US` | Comma-separated country priority for routing |
+| `FORCE_AD`           | `true`              | Force AD=1 toward upstreams (request DNSSEC validation); `false` preserves the client's own AD bit |
+| `RATE_LIMIT_PER_10S` | `100`               | Per-source-IP request budget per 10s window (DoH + /resolve; best-effort, in-memory per isolate); `0` disables |
+| `connectingIp` / `connectingIpCountry` | (unset) | **Debug only**: force the client IP/country used for ECS/routing. Never set in production |
 
 **Example wrangler.toml:**
 
@@ -96,7 +100,8 @@ COUNTRY_PRIORITY = "CN,HK,TW,JP,SG,US"
 GET https://<your-worker-domain>/resolve?name=example.com&type=A
 ```
 
-Returns Google DNS JSON API compatible response.
+Returns a Google DNS JSON API compatible response (`Status` is the real RCODE: NXDOMAIN=3, etc.).
+Only `A` and `AAAA` types are supported (others return 400); internationalized names must be punycoded (xn--).
 
 ### Health Check
 
@@ -132,13 +137,28 @@ The DoH endpoint accepts requests in the following format:
 | :--------------- | :------------------------------------------------------------------- | :------- | :----------------------------------- |
 | `client-ip`      | The client's real IP address.                                        | No       | URL Path > `CF-Connecting-IP` header |
 | `client-country` | The 2-letter ISO country code of the client.                         | No       | URL Path > `CF-IPCountry` header     |
-| `alternative-ip` | The IP address to use for the secondary resolution (e.g., VPN exit). | Yes      | URL Path                             |
+| `alternative-ip` | The IP address to use for the secondary resolution (e.g., VPN exit). | No       | URL Path; falls back to client-ip    |
 
 ### Example
 
 ```bash
 curl "https://doh.subdomain.workers.dev/client-ip/223.5.5.5/client-country/CN/alternative-ip/8.8.8.8/dns-query?dns=<BASE64_DNS_QUERY>"
 ```
+
+## Local Development & Testing
+
+```bash
+npm install
+npm run typecheck   # tsc --noEmit
+npm test            # full offline regression: typecheck + pipeline state machine + worker endpoints
+```
+
+`npm test` (`python tests/run_all.py`) needs no Cloudflare credentials: D1 is the
+local miniflare stand-in (migrations/0002 + tests/seed.sql applied automatically)
+and the worker runs under `wrangler dev` locally. Pipeline data tests need
+`tmp/mm/*.mmdb` (Loyalsoldier Country.mmdb; two distinct tags cover the
+converge/gate paths — skipped when absent). The "Offline Tests" CI workflow runs
+the same suite on every relevant push/PR.
 
 ## Contributing
 
