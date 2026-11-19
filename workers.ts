@@ -90,7 +90,7 @@ const STATS = {
 	cache: { memHits: 0, apiHits: 0, misses: 0 },
 	dns: { cacheHits: 0, cacheMisses: 0, negativeCached: 0, prefetches: 0, upstreamFetches: 0 },
 	errors: 0,
-	startTime: Date.now(),
+	startTime: 0, // set lazily on first request (module-scope Date.now() is frozen on recent compat dates)
 };
 
 // D1 error cooldown: after a geo lookup failure, skip D1 for a short window
@@ -201,6 +201,11 @@ function initConfig(env: Env): void {
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		initConfig(env);
+
+		// Lazy start time: with recent compatibility dates, Date.now() at module
+		// scope is frozen (returns 0) as a timing side-channel mitigation, so
+		// initialize on the first request instead.
+		if (!STATS.startTime) STATS.startTime = Date.now();
 
 		// Initialize D1 straight from bindings for best read performance
 		geoip_db ??= env.geolite2_country;

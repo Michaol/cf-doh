@@ -126,6 +126,7 @@ CI "Offline Tests" 工作流在相关 push/PR 自动执行（ubuntu-26.04 + Node
 - ~~安全待办：未认证 /debug/ip 与 client-ip 参数面配额消耗~~ **已关闭**：
   /debug/ip 令牌门控（默认 404）；DoH//resolve 每源 IP 令牌桶限流（§3.9）；
   verify-only 漂移自动收敛自愈；SERVFAIL 不再被缓存固化。
-- **P4 切换待执行**：wrangler.toml 目前仍绑定 legacy 库 `geoip_20260901_weur`
-  （2026-09-01 数据）。`geoip_live_weur` 已收敛就绪——按 §3.8 一键切换后，
-  每日同步的新数据才真正被 Worker 消费。切换完成前这是最大的数据新鲜度缺口。
+- ~~P4 切换待执行~~ **已完成（2026-11-19）**：经 Deploy `cutover_live` 校验切换至
+  `geoip_live_weur`（uuid `8e526c06-9903-4728-8080-87d5c266ab2d`，切换时
+  source_tag=202611120018），绑定已回写仓库（577fa4f），生产冒烟 12/12 通过。
+  legacy 库 `geoip_20260901_weur` 保留一个周期作冷回滚，随后按 §3.6 按名删除。

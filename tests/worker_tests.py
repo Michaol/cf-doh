@@ -248,9 +248,12 @@ check('health: connected + d1Cooldown field', s == 200 and j.get('database') == 
 
 s, h, b = req('/stats')
 j = json.loads(b)
+uptime_s = int(str(j.get('uptime', '0s')).rstrip('s'))
 check('stats shape (negativeCached, rateLimited)', s == 200
       and 'negativeCached' in j.get('dnsCache', {}) and 'rateLimited' in j.get('requests', {}),
       f'dns={j.get("dnsCache")}')
+check('stats uptime sane (module-scope Date.now frozen guard)', 0 <= uptime_s < 3600,
+      f'uptime={j.get("uptime")}')
 
 # --- rate limiting (dedicated low-limit instance) ------------------------------
 if RATE_BASE:
