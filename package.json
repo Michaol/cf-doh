@@ -5,7 +5,9 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev --remote --local-protocol https --env dev",
-    "start": "wrangler dev"
+    "start": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "python tests/run_all.py"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260114.0",

@@ -3,10 +3,31 @@
  *
  * Features:
  * - IPv4 & IPv6 support
- * - L1 (Memory) + L2 (Cache API) caching
- * - Upstream failover (Cloudflare primary, Google secondary)
+ * - L1 (Memory) + L2 (Cache API) caching, TTL aging, single-flight dedup
+ * - Upstream failover (Cloudflare primary, Google secondary, staggered race)
  * - AAAA record parsing
+ * - Best-effort per-source-IP rate limiting (free-tier friendly, in-memory)
+ *
+ * Free-tier constraints honored: no paid bindings (KV/DO/R2/Queues), bounded
+ * in-memory structures, D1 reads only on cache miss, CPU work per request is
+ * O(answers) packet walks — microseconds, far below the 10ms CPU budget.
  */
+
+import {
+	DNS_TYPE_A,
+	DNS_TYPE_AAAA,
+	InvalidDnsNameError,
+	buildDnsQuery,
+	combineQueryData,
+	createOptRecord,
+	extractHeaderAndQuestion,
+	parseDnsQuery,
+	parseDnsResponse,
+	prepareCachedResponse,
+	validateDnsQuery,
+	validateDomainName,
+} from './dns';
+import { ip4ToNumber, ipv6ToHex, isIPv4, isIPv6, parseValidIp } from './ip';
 
 // ============================================================
 // Type Definitions
@@ -14,6 +35,8 @@
 
 interface Env {
 	geolite2_country: D1Database;
+	// Debug-only overrides (never set these in production): force the client
+	// identity used for ECS/routing regardless of the actual request source.
 	connectingIp?: string;
 	connectingIpCountry?: string;
 	// Config
@@ -22,23 +45,8 @@ interface Env {
 	DEBUG?: string;
 	DEBUG_TOKEN?: string;
 	COUNTRY_PRIORITY?: string;
-}
-
-interface DnsAnswer {
-	type: 'A' | 'AAAA';
-	ip: string;
-	ttl: number;
-}
-
-interface DnsResponse {
-	id: number;
-	flags: number;
-	qdCount: number;
-	anCount: number;
-	nsCount: number;
-	arCount: number;
-	answers: DnsAnswer[];
-	minTtl: number; // Minimum TTL from all answers
+	FORCE_AD?: string; // 'false' preserves the client's AD bit (default: force AD=1 upstream)
+	RATE_LIMIT_PER_10S?: string; // requests per source IP per 10s window (default 100; 0 disables)
 }
 
 interface GeoIpResult {
@@ -50,16 +58,23 @@ interface GeoIpResult {
 // ============================================================
 
 let geoip_db: D1Database | null = null;
-const MEM_CACHE = new Map<string, string>();
+// L1 geo cache entries expire with the same TTL as L2 so daily data updates
+// propagate without waiting for an isolate restart.
+const MEM_CACHE = new Map<string, { country: string; expires: number }>();
 
 // DNS Response Cache (L1 Memory)
 const DNS_CACHE = new Map<string, { data: ArrayBuffer; expires: number; ttl: number }>();
 const DNS_CACHE_MAX_SIZE = 5000;
 
+// Single-flight: concurrent identical misses share one upstream fetch.
+const IN_FLIGHT = new Map<string, Promise<ArrayBuffer>>();
+
 // Defaults
 let MEM_CACHE_MAX_SIZE = 10000;
 let CACHE_TTL_SECONDS = 86400; // 24 hours
 let DEBUG = false;
+let FORCE_AD = true;
+let RATE_LIMIT_PER_10S = 100;
 
 // DNS Cache Config
 const DNS_CACHE_CONFIG = {
@@ -71,9 +86,9 @@ const DNS_CACHE_CONFIG = {
 
 // Statistics (in-memory, resets on worker restart)
 const STATS = {
-	requests: { total: 0, doh: 0, json: 0, health: 0, debug: 0 },
+	requests: { total: 0, doh: 0, json: 0, health: 0, debug: 0, rateLimited: 0 },
 	cache: { memHits: 0, apiHits: 0, misses: 0 },
-	dns: { cacheHits: 0, cacheMisses: 0, negativeHits: 0, prefetches: 0 },
+	dns: { cacheHits: 0, cacheMisses: 0, negativeCached: 0, prefetches: 0, upstreamFetches: 0 },
 	errors: 0,
 	startTime: Date.now(),
 };
@@ -94,11 +109,75 @@ function log(...args: any[]) {
 // Can be overridden via COUNTRY_PRIORITY env var (comma-separated)
 let COUNTRY_PRIORITY: string[] = ['CN', 'HK', 'TW', 'JP', 'SG', 'US'];
 
+// Selection priorities: lower wins. An answerless response must lose to any
+// response that actually carries answers (NOERROR/empty happens in the wild).
+const NOT_IN_PRIORITY_LIST = 999;
+const NO_ANSWER_PRIORITY = 1000;
+
 // Upstream DNS servers (Cloudflare first for internal network optimization)
 const UPSTREAM_ENDPOINTS = [
 	'https://1.1.1.1/dns-query', // Cloudflare (Primary)
 	'https://dns.google/dns-query', // Google (Secondary)
 ];
+const UPSTREAM_TIMEOUT_MS = 2500;
+const UPSTREAM_RACE_DELAY_MS = 300; // backup starts only if primary is slow
+
+// ============================================================
+// Rate Limiting (best-effort, per isolate)
+// ============================================================
+// Token bucket per source IP: RATE_LIMIT_PER_10S capacity, refilled linearly
+// over 10s. In-memory and per-isolate by design — zero cost on the free tier,
+// no extra bindings. It raises the bar against quota-burn / upstream-hammering
+// abuse; for hard guarantees add a Cloudflare WAF rate-limiting rule (see
+// RUNBOOK). Map is capped; oldest entries are evicted when full.
+
+const RATE_LIMITERS = new Map<string, { tokens: number; updated: number }>();
+const RATE_LIMITER_MAX_ENTRIES = 10_000;
+const RATE_LIMIT_WINDOW_MS = 10_000;
+
+function rateLimitOk(sourceIp: string): boolean {
+	if (RATE_LIMIT_PER_10S <= 0) return true;
+	const now = Date.now();
+	const capacity = RATE_LIMIT_PER_10S;
+	let bucket = RATE_LIMITERS.get(sourceIp);
+	if (bucket) {
+		bucket.tokens = Math.min(capacity, bucket.tokens + ((now - bucket.updated) * capacity) / RATE_LIMIT_WINDOW_MS);
+		bucket.updated = now;
+		// LRU refresh so active IPs are not evicted first
+		RATE_LIMITERS.delete(sourceIp);
+		RATE_LIMITERS.set(sourceIp, bucket);
+	} else {
+		if (RATE_LIMITERS.size >= RATE_LIMITER_MAX_ENTRIES) {
+			const oldest = RATE_LIMITERS.keys().next().value;
+			if (oldest) RATE_LIMITERS.delete(oldest);
+		}
+		bucket = { tokens: capacity, updated: now };
+		RATE_LIMITERS.set(sourceIp, bucket);
+	}
+	if (bucket.tokens < 1) return false;
+	bucket.tokens -= 1;
+	return true;
+}
+
+function rateLimitedResponse(): Response {
+	STATS.requests.rateLimited++;
+	return handleCors(
+		new Response('Rate limit exceeded', {
+			status: 429,
+			headers: { 'Retry-After': '1', 'Content-Type': 'text/plain' },
+		})
+	);
+}
+
+/** Constant-time string comparison (length is not secret; content is). */
+function timingSafeEqualStr(a: string, b: string): boolean {
+	if (a.length !== b.length) return false;
+	let diff = 0;
+	for (let i = 0; i < a.length; i++) {
+		diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+	}
+	return diff === 0;
+}
 
 // ============================================================
 // Main Handler
@@ -110,6 +189,11 @@ export default {
 		if (env.MEM_CACHE_MAX_SIZE) MEM_CACHE_MAX_SIZE = Number.parseInt(env.MEM_CACHE_MAX_SIZE, 10) || 10000;
 		if (env.CACHE_TTL_SECONDS) CACHE_TTL_SECONDS = Number.parseInt(env.CACHE_TTL_SECONDS, 10) || 86400;
 		DEBUG = env.DEBUG === 'true';
+		FORCE_AD = env.FORCE_AD !== 'false';
+		if (env.RATE_LIMIT_PER_10S) {
+			const n = Number.parseInt(env.RATE_LIMIT_PER_10S, 10);
+			if (!Number.isNaN(n) && n >= 0) RATE_LIMIT_PER_10S = n;
+		}
 		if (env.COUNTRY_PRIORITY) {
 			COUNTRY_PRIORITY = env.COUNTRY_PRIORITY.split(',').map((c) => c.trim().toUpperCase());
 		}
@@ -138,8 +222,13 @@ export default {
 			return handleCors(handleStats());
 		}
 
+		// The actual request source (not the spoofable client-ip URL param)
+		// keys the rate limiter.
+		const sourceIp = request.headers.get('cf-connecting-ip') ?? 'unknown';
+
 		if (path === '/resolve') {
 			STATS.requests.json++;
+			if (!rateLimitOk(sourceIp)) return rateLimitedResponse();
 			return handleCors(await handleJsonDns(url, ctx));
 		}
 
@@ -147,7 +236,8 @@ export default {
 			STATS.requests.debug++;
 			// Token-gated (default closed): unauthenticated geo lookups are a
 			// read-quota burn amplifier (5M rows_read/day is account-wide).
-			if (!env.DEBUG_TOKEN || request.headers.get('x-debug-token') !== env.DEBUG_TOKEN) {
+			const token = request.headers.get('x-debug-token');
+			if (!env.DEBUG_TOKEN || !token || !timingSafeEqualStr(token, env.DEBUG_TOKEN)) {
 				return handleCors(new Response('Not Found', { status: 404 }));
 			}
 			const ip = path.substring('/debug/ip/'.length);
@@ -156,6 +246,7 @@ export default {
 
 		// Legacy DoH endpoint
 		STATS.requests.doh++;
+		if (!rateLimitOk(sourceIp)) return rateLimitedResponse();
 		return handleCors(await handleDoH(request, url, env, ctx));
 	},
 };
@@ -168,12 +259,20 @@ function handleCors(response: Response): Response {
 	const headers = new Headers(response.headers);
 	headers.set('Access-Control-Allow-Origin', '*');
 	headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-	headers.set('Access-Control-Allow-Headers', 'Content-Type, Accept');
+	headers.set('Access-Control-Allow-Headers', 'Content-Type, Accept, x-debug-token');
 	headers.set('Access-Control-Max-Age', '86400');
 	return new Response(response.body, {
 		status: response.status,
 		statusText: response.statusText,
 		headers,
+	});
+}
+
+/** Fresh DNS message response — never copy upstream headers (encoding/length
+ * may describe a different body than the decoded buffer we hold). */
+function dnsMessageResponse(buffer: ArrayBuffer): Response {
+	return new Response(buffer, {
+		headers: { 'Content-Type': 'application/dns-message' },
 	});
 }
 
@@ -187,7 +286,7 @@ async function handleHealth(): Promise<Response> {
 	if (geoip_db) {
 		try {
 			await geoip_db.prepare('SELECT 1;').run();
-			database = Date.now() < d1_error_until ? 'cooldown' : 'connected';
+			database = 'connected';
 		} catch {
 			database = 'error';
 		}
@@ -207,6 +306,7 @@ async function handleHealth(): Promise<Response> {
 			ttlSeconds: CACHE_TTL_SECONDS,
 		},
 		database,
+		d1Cooldown: Date.now() < d1_error_until,
 	};
 	return new Response(JSON.stringify(status, null, 2), {
 		headers: { 'Content-Type': 'application/json' },
@@ -259,7 +359,7 @@ interface JsonDnsResponse {
 
 async function handleJsonDns(url: URL, ctx: ExecutionContext): Promise<Response> {
 	const name = url.searchParams.get('name');
-	const type = url.searchParams.get('type') || 'A';
+	const type = (url.searchParams.get('type') || 'A').toUpperCase();
 
 	if (!name) {
 		return new Response(JSON.stringify({ error: 'Missing name parameter' }), {
@@ -267,28 +367,36 @@ async function handleJsonDns(url: URL, ctx: ExecutionContext): Promise<Response>
 			headers: { 'Content-Type': 'application/json' },
 		});
 	}
+	if (type !== 'A' && type !== 'AAAA') {
+		return new Response(JSON.stringify({ error: `Unsupported type '${type}': only A and AAAA are supported` }), {
+			status: 400,
+			headers: { 'Content-Type': 'application/json' },
+		});
+	}
 
 	try {
-		// Build DNS query
-		const queryData = buildDnsQuery(name, type);
+		// Validate + canonicalize (strips trailing dot) before building anything
+		const cleanName = validateDomainName(name);
+		const queryData = buildDnsQuery(cleanName, type);
 
-		// Query upstream
-		const response = await queryDns(queryData, null, ctx);
-		const buffer = await response.arrayBuffer();
+		// Query upstream (no ECS for the generic JSON API)
+		const buffer = await queryDns(queryData, null, ctx);
 		const dnsResponse = parseDnsResponse(buffer);
 
-		// Format JSON response (Google DNS JSON API compatible)
+		// Format JSON response (Google DNS JSON API compatible).
+		// Status is the RCODE (low 4 bits of flags) — NOT the opcode.
+		const qtype = type === 'AAAA' ? DNS_TYPE_AAAA : DNS_TYPE_A;
 		const jsonResponse: JsonDnsResponse = {
-			Status: (dnsResponse.flags >> 11) & 0xf,
+			Status: dnsResponse.flags & 0xf,
 			TC: ((dnsResponse.flags >> 9) & 1) === 1,
 			RD: ((dnsResponse.flags >> 8) & 1) === 1,
 			RA: ((dnsResponse.flags >> 7) & 1) === 1,
 			AD: ((dnsResponse.flags >> 5) & 1) === 1,
 			CD: ((dnsResponse.flags >> 4) & 1) === 1,
-			Question: [{ name, type: type === 'AAAA' ? 28 : 1 }],
+			Question: [{ name: cleanName, type: qtype }],
 			Answer: dnsResponse.answers.map((a) => ({
-				name,
-				type: a.type === 'AAAA' ? 28 : 1,
+				name: cleanName,
+				type: a.type === 'AAAA' ? DNS_TYPE_AAAA : DNS_TYPE_A,
 				TTL: a.ttl, // Real TTL from the upstream answer
 				data: a.ip,
 			})),
@@ -299,53 +407,12 @@ async function handleJsonDns(url: URL, ctx: ExecutionContext): Promise<Response>
 		});
 	} catch (err) {
 		const error = err as Error;
+		const status = err instanceof InvalidDnsNameError ? 400 : 500;
 		return new Response(JSON.stringify({ error: error.message }), {
-			status: 500,
+			status,
 			headers: { 'Content-Type': 'application/json' },
 		});
 	}
-}
-
-/**
- * Build a DNS query packet for the given domain and type.
- */
-function buildDnsQuery(name: string, type: string): Uint8Array {
-	const labels = name.split('.');
-	const qtype = type.toUpperCase() === 'AAAA' ? 28 : 1;
-
-	// Calculate total length
-	let nameLen = 0;
-	for (const label of labels) {
-		nameLen += 1 + label.length;
-	}
-	nameLen += 1; // Null terminator
-
-	const packet = new Uint8Array(12 + nameLen + 4);
-	const view = new DataView(packet.buffer);
-	const dnsId = crypto.getRandomValues(new Uint16Array(1))[0];
-
-	// Header
-	view.setUint16(0, dnsId); // ID
-	view.setUint16(2, 0x0100); // Flags: standard query, recursion desired
-	view.setUint16(4, 1); // QDCOUNT
-	view.setUint16(6, 0); // ANCOUNT
-	view.setUint16(8, 0); // NSCOUNT
-	view.setUint16(10, 0); // ARCOUNT
-
-	// Question section
-	let offset = 12;
-	for (const label of labels) {
-		packet[offset++] = label.length;
-		for (let i = 0; i < label.length; i++) {
-			packet[offset++] = label.codePointAt(i) ?? 0;
-		}
-	}
-	packet[offset++] = 0; // Null terminator
-
-	view.setUint16(offset, qtype); // QTYPE
-	view.setUint16(offset + 2, 1); // QCLASS (IN)
-
-	return packet;
 }
 
 // ============================================================
@@ -371,7 +438,8 @@ async function handleDebugIp(ip: string, ctx: ExecutionContext): Promise<Respons
 	}
 
 	const country = await ip2country(ip, ctx);
-	const inCache = MEM_CACHE.has(ip);
+	const entry = MEM_CACHE.get(ip);
+	const inCache = !!entry && entry.expires > Date.now();
 
 	const result = {
 		ip,
@@ -389,6 +457,38 @@ async function handleDebugIp(ip: string, ctx: ExecutionContext): Promise<Respons
 // ============================================================
 // Legacy DoH Handler
 // ============================================================
+
+/**
+ * One dual-resolution branch: query with the given ECS IP, then rank the
+ * response by the country of its first answer. Module-level (not a closure
+ * inside handleDoH) to keep cognitive complexity low.
+ */
+async function queryDnsWithIp(
+	queryData: Uint8Array,
+	ip: string | null,
+	label: string,
+	ctx: ExecutionContext
+): Promise<{ response: Response; country: string | null; priority: number }> {
+	const buffer = await queryDns(queryData, ip, ctx);
+	const dnsResponse = parseDnsResponse(buffer);
+
+	if (!dnsResponse.answers.length) {
+		// Answerless responses rank BELOW any response carrying answers.
+		return { response: dnsMessageResponse(buffer), country: null, priority: NO_ANSWER_PRIORITY };
+	}
+
+	const responseIpSample = dnsResponse.answers[0];
+	const responseIpCountry = await ip2country(responseIpSample.ip, ctx);
+	const priority = responseIpCountry ? COUNTRY_PRIORITY.indexOf(responseIpCountry) : -1;
+
+	log(`${label} response: ${responseIpSample.ip}, Country: ${responseIpCountry}, Priority: ${priority}`);
+
+	return {
+		response: dnsMessageResponse(buffer),
+		country: responseIpCountry,
+		priority: priority >= 0 ? priority : NOT_IN_PRIORITY_LIST, // Not in list = lowest ranked answer
+	};
+}
 
 async function handleDoH(request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const params = url.pathname.substring(1).split('/');
@@ -414,40 +514,14 @@ async function handleDoH(request: Request, url: URL, env: Env, ctx: ExecutionCon
 		return malformed;
 	}
 
-	// Unified DNS query function with country matching
-	async function queryDnsWithIp(
-		ip: string | null,
-		label: string
-	): Promise<{ response: Response; country: string | null; priority: number }> {
-		const response = await queryDns(queryData, ip, ctx);
-		const buffer = await response.arrayBuffer();
-		const dnsResponse = parseDnsResponse(buffer);
-
-		if (!dnsResponse.answers.length) {
-			return { response: new Response(buffer, response), country: null, priority: -1 };
-		}
-
-		const responseIpSample = dnsResponse.answers[0];
-		const responseIpCountry = await ip2country(responseIpSample.ip, ctx);
-		const priority = responseIpCountry ? COUNTRY_PRIORITY.indexOf(responseIpCountry) : -1;
-
-		log(`${label} response: ${responseIpSample.ip}, Country: ${responseIpCountry}, Priority: ${priority}`);
-
-		return {
-			response: new Response(buffer, response),
-			country: responseIpCountry,
-			priority: priority >= 0 ? priority : 999, // Not in list = lowest priority
-		};
-	}
-
 	const queryUpstreamStart = Date.now();
 	// allSettled: one failing branch must not discard the other's usable answer.
 	// When both targets are the same IP the queries are identical (same cache
 	// key / ECS) — share one promise instead of double-fetching upstream + D1.
-	const clientPromise = queryDnsWithIp(clientIp, 'Client IP');
+	const clientPromise = queryDnsWithIp(queryData, clientIp, 'Client IP', ctx);
 	const [clientSettled, altSettled] = await Promise.allSettled([
 		clientPromise,
-		alternativeIp === clientIp ? clientPromise : queryDnsWithIp(alternativeIp, 'Alt IP'),
+		alternativeIp === clientIp ? clientPromise : queryDnsWithIp(queryData, alternativeIp, 'Alt IP', ctx),
 	]);
 	const queryUpstreamEnd = Date.now();
 
@@ -486,7 +560,6 @@ async function handleDoH(request: Request, url: URL, env: Env, ctx: ExecutionCon
 }
 
 // ============================================================
-// ============================================================
 // Parameter Extraction
 // ============================================================
 
@@ -496,15 +569,6 @@ function extractParam(params: string[], name: string): string | null {
 		return params[index + 1] ?? null;
 	}
 	return null;
-}
-
-/**
- * Return the IP if it is a valid IPv4/IPv6 address, otherwise null.
- * Keeps user-supplied garbage from reaching createOptRecord (which throws).
- */
-function parseValidIp(ip: string | null | undefined): string | null {
-	if (!ip) return null;
-	return isIPv4(ip) || isIPv6(ip) ? ip : null;
 }
 
 /**
@@ -524,91 +588,21 @@ function parseAlternativeIp(params: string[], clientIp: string | null): string |
 	return clientIp;
 }
 
-/**
- * Structural validation of a client DNS query before any parse loop runs:
- * header length, exactly one question, fully bounded label walk.
- * Returns null when valid, or a 400 Response when malformed.
- */
-function validateDnsQuery(data: Uint8Array): Response | null {
-	if (data.length < 12) {
-		return new Response('Malformed DNS query: shorter than header', { status: 400 });
-	}
-	const qdcount = (data[4] << 8) | data[5];
-	if (qdcount !== 1) {
-		return new Response('Malformed DNS query: expected exactly one question', { status: 400 });
-	}
-	let offset = 12;
-	for (;;) {
-		if (offset >= data.length) {
-			return new Response('Malformed DNS query: truncated name', { status: 400 });
-		}
-		const len = data[offset];
-		if (len === 0) {
-			offset++;
-			break;
-		}
-		if (len > 63) {
-			return new Response('Malformed DNS query: invalid label length or compression pointer', { status: 400 });
-		}
-		offset += 1 + len;
-	}
-	if (offset + 4 > data.length) {
-		return new Response('Malformed DNS query: truncated QTYPE/QCLASS', { status: 400 });
-	}
-	return null;
-}
-
-/**
- * Copy a cached DNS response with its message ID rewritten to the current
- * query's ID (strict RFC 8484 clients discard ID-mismatched responses).
- * The stored cache buffer is never mutated.
- */
-function patchDnsId(cached: ArrayBuffer, queryData: Uint8Array): ArrayBuffer {
-	if (cached.byteLength < 12 || queryData.length < 2) {
-		return cached;
-	}
-	const out = new Uint8Array(cached.slice(0));
-	out[0] = queryData[0];
-	out[1] = queryData[1];
-	return out.buffer;
-}
-
-/**
- * Parse DNS query from request (GET or POST).
- */
-async function parseDnsQuery(request: Request, url: URL): Promise<Uint8Array | Response> {
-	if (request.method === 'GET') {
-		const dnsParam = url.searchParams.get('dns');
-		if (!dnsParam) {
-			return new Response('Missing dns parameter', { status: 400 });
-		}
-		try {
-			// RFC 8484 GET uses base64url; atob only accepts the standard alphabet
-			const decodedQuery = atob(dnsParam.replace(/-/g, '+').replace(/_/g, '/'));
-			return Uint8Array.from(decodedQuery, (c) => c.codePointAt(0) ?? 0);
-		} catch {
-			return new Response('Invalid dns parameter encoding', { status: 400 });
-		}
-	}
-
-	if (request.method === 'POST') {
-		const originalQuery = await request.arrayBuffer();
-		return new Uint8Array(originalQuery);
-	}
-
-	return new Response('Unsupported method', { status: 405 });
-}
-
 // ============================================================
-// DNS Query with Upstream Failover
+// DNS Query with Caching, Single-Flight and Upstream Failover
 // ============================================================
 
 /**
- * Check L1 memory cache and handle prefetching.
+ * Check L1 memory cache: expired entries are purged; hits are served with the
+ * current query's ID and TTLs aged by the time spent in cache.
  */
-function checkL1Cache(cacheKey: string, queryData: Uint8Array, clientIp: string | null, ctx?: ExecutionContext): Response | null {
+function checkL1Cache(cacheKey: string, queryData: Uint8Array, clientIp: string | null, ctx?: ExecutionContext): ArrayBuffer | null {
 	const cachedEntry = DNS_CACHE.get(cacheKey);
-	if (!cachedEntry || cachedEntry.expires <= Date.now()) {
+	if (!cachedEntry) {
+		return null;
+	}
+	if (cachedEntry.expires <= Date.now()) {
+		DNS_CACHE.delete(cacheKey); // purge expired entries instead of letting them squat capacity
 		return null;
 	}
 
@@ -619,9 +613,10 @@ function checkL1Cache(cacheKey: string, queryData: Uint8Array, clientIp: string 
 	STATS.dns.cacheHits++;
 	log(`DNS Cache HIT (memory): ${cacheKey}`);
 
+	const remainingMs = cachedEntry.expires - Date.now();
+
 	// Check if we need to prefetch (remaining TTL < threshold)
 	if (ctx) {
-		const remainingMs = cachedEntry.expires - Date.now();
 		const totalTtlMs = (cachedEntry.ttl || 300) * 1000;
 		const remainingRatio = remainingMs / totalTtlMs;
 
@@ -632,24 +627,20 @@ function checkL1Cache(cacheKey: string, queryData: Uint8Array, clientIp: string 
 		}
 	}
 
-	// Serve with the current query's ID (cached buffer keeps the original)
-	return new Response(patchDnsId(cachedEntry.data, queryData), {
-		headers: { 'Content-Type': 'application/dns-message' },
-	});
+	const elapsedSeconds = cachedEntry.ttl - remainingMs / 1000;
+	return prepareCachedResponse(cachedEntry.data, queryData, elapsedSeconds);
 }
 
 /**
- * Check L2 Cache API and optionally warm up L1.
+ * Check L2 Cache API and optionally warm up L1. Expired entries are treated
+ * as a miss (never served stale).
  */
-async function checkL2Cache(cacheKey: string, cacheUrl: Request, queryData: Uint8Array): Promise<Response | null> {
+async function checkL2Cache(cacheKey: string, cacheUrl: Request, queryData: Uint8Array): Promise<ArrayBuffer | null> {
 	const cache = caches.default;
 	const cachedResponse = await cache.match(cacheUrl);
 	if (!cachedResponse) {
 		return null;
 	}
-
-	STATS.dns.cacheHits++;
-	log(`DNS Cache HIT (cache api): ${cacheKey}`);
 
 	const buffer = await cachedResponse.clone().arrayBuffer();
 
@@ -663,21 +654,35 @@ async function checkL2Cache(cacheKey: string, cacheUrl: Request, queryData: Uint
 		}
 	}
 
-	// Skip L1 cache if already expired
+	// Expired in L2: treat as a miss and revalidate upstream
 	if (ttl <= 0) {
-		log(`Skipping L1 cache: TTL expired (${cacheKey})`);
-		return new Response(patchDnsId(buffer, queryData), {
-			headers: { 'Content-Type': 'application/dns-message' },
-		});
+		log(`L2 entry expired, treating as miss: ${cacheKey}`);
+		return null;
+	}
+
+	STATS.dns.cacheHits++;
+	log(`DNS Cache HIT (cache api): ${cacheKey}`);
+
+	// Age TTLs by time already spent in cache (X-Original-Ttl written on put;
+	// entries written before that header existed are served unaged — fail open).
+	let elapsedSeconds = 0;
+	const originalTtlStr = cachedResponse.headers.get('X-Original-Ttl');
+	if (originalTtlStr) {
+		const originalTtl = Number.parseInt(originalTtlStr, 10);
+		if (!Number.isNaN(originalTtl)) {
+			elapsedSeconds = Math.max(0, originalTtl - ttl);
+		}
 	}
 
 	updateDnsCache(cacheKey, buffer, ttl);
-	return new Response(patchDnsId(buffer, queryData), {
-		headers: { 'Content-Type': 'application/dns-message' },
-	});
+	return prepareCachedResponse(buffer, queryData, elapsedSeconds);
 }
 
-async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: ExecutionContext): Promise<Response> {
+/**
+ * Resolve a DNS query through L1 → L2 → single-flight upstream fetch.
+ * Returns the raw DNS response buffer prepared for THIS query's ID.
+ */
+async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: ExecutionContext): Promise<ArrayBuffer> {
 	const cacheKey = generateDnsCacheKey(queryData, clientIp);
 
 	// Check L1 Memory Cache
@@ -691,74 +696,99 @@ async function queryDns(queryData: Uint8Array, clientIp: string | null, ctx?: Ex
 
 	STATS.dns.cacheMisses++;
 
-	// Query upstream
-	const response = await queryDnsUpstream(queryData, clientIp);
-	const buffer = await response.arrayBuffer();
+	// Single-flight: concurrent identical misses share one upstream fetch
+	// (saves upstream + D1 consumption; the free-tier request burst makes
+	// thundering herds on hot names common).
+	let inflight = IN_FLIGHT.get(cacheKey);
+	if (!inflight) {
+		inflight = fetchAndCache(queryData, clientIp, cacheKey, ctx).finally(() => {
+			IN_FLIGHT.delete(cacheKey);
+		});
+		IN_FLIGHT.set(cacheKey, inflight);
+	}
+	const buffer = await inflight;
 
-	// Parse response to get TTL and check for NXDOMAIN
+	// A shared in-flight response carries the first query's ID — rewrite to
+	// this query's ID (elapsed 0: the buffer is fresh from upstream).
+	return prepareCachedResponse(buffer, queryData, 0);
+}
+
+/**
+ * Upstream fetch + cache population (the single-flight body).
+ * Only NOERROR (rcode 0) and NXDOMAIN (rcode 3) are cached; SERVFAIL/REFUSED
+ * and other error rcodes pass through uncached so the next request retries.
+ */
+async function fetchAndCache(queryData: Uint8Array, clientIp: string | null, cacheKey: string, ctx?: ExecutionContext): Promise<ArrayBuffer> {
+	const buffer = await queryDnsUpstream(queryData, clientIp);
 	const dnsResponse = parseDnsResponse(buffer);
 	const rcode = dnsResponse.flags & 0xf;
 
-	let ttl: number;
+	let ttl: number | null;
 	if (rcode === 3) {
 		// NXDOMAIN - use negative TTL
 		ttl = DNS_CACHE_CONFIG.negativeTtl;
-		STATS.dns.negativeHits++;
+		STATS.dns.negativeCached++;
 		log(`DNS NXDOMAIN cached: ${cacheKey}, TTL: ${ttl}s`);
-	} else if (dnsResponse.answers.length > 0) {
+	} else if (rcode === 0 && dnsResponse.answers.length > 0) {
 		// Use real TTL from DNS response, bounded by config limits
 		ttl = Math.min(Math.max(dnsResponse.minTtl, DNS_CACHE_CONFIG.minTtl), DNS_CACHE_CONFIG.maxTtl);
 		log(`DNS Response cached: ${cacheKey}, realTTL: ${dnsResponse.minTtl}s, boundedTTL: ${ttl}s, answers: ${dnsResponse.answers.length}`);
-	} else {
-		// No answers, minimal cache
+	} else if (rcode === 0) {
+		// NOERROR with no answers, minimal cache
 		ttl = DNS_CACHE_CONFIG.minTtl;
-	}
-
-	// Update L1 cache
-	updateDnsCache(cacheKey, buffer, ttl);
-
-	// Update L2 cache: register with the runtime so the put survives the
-	// response being returned (bare fire-and-forget gets cancelled)
-	if (ctx) {
-		ctx.waitUntil(updateL2Cache(cacheKey, buffer, ttl, false));
 	} else {
-		await updateL2Cache(cacheKey, buffer, ttl, true);
+		// SERVFAIL / REFUSED / FORMERR / NOTIMPL: transient or query-specific —
+		// caching would pin the failure for the whole TTL window.
+		ttl = null;
+		log(`DNS rcode ${rcode} not cached: ${cacheKey}`);
 	}
 
-	return new Response(buffer, {
-		headers: { 'Content-Type': 'application/dns-message' },
-	});
+	if (ttl !== null) {
+		// Update L1 cache
+		updateDnsCache(cacheKey, buffer, ttl);
+
+		// Update L2 cache: register with the runtime so the put survives the
+		// response being returned (bare fire-and-forget gets cancelled)
+		if (ctx) {
+			ctx.waitUntil(updateL2Cache(cacheKey, buffer, ttl));
+		} else {
+			await updateL2Cache(cacheKey, buffer, ttl);
+		}
+	}
+
+	return buffer;
 }
 
 /**
  * Generate cache key from DNS query data and client IP prefix.
- * Optimized: uses array join instead of repeated string concatenation.
+ * Domain is lowercased (DNS names are case-insensitive; DNS 0x20 clients
+ * randomize case) and the IPv6 prefix uses the expanded hex form so different
+ * textual representations of the same /48 share one entry.
  */
 function generateDnsCacheKey(queryData: Uint8Array, clientIp: string | null): string {
-	// Extract domain name and type from query
+	// Extract domain name and type from query (validateDnsQuery ran first)
 	let offset = 12; // Skip header
 	const domainParts: string[] = [];
 	while (offset < queryData.length && queryData[offset] !== 0) {
 		const len = queryData[offset];
 		if (offset + 1 + len > queryData.length) break; // bounds guard
-		// Use subarray and convert to string via TextDecoder or manual codepoints
-		const part = Array.from(queryData.slice(offset + 1, offset + 1 + len), b => String.fromCodePoint(b)).join('');
+		const part = Array.from(queryData.slice(offset + 1, offset + 1 + len), (b) => String.fromCodePoint(b)).join('');
 		domainParts.push(part);
 		offset += len + 1;
 	}
-	const domain = domainParts.join('.');
+	const domain = domainParts.join('.').toLowerCase();
 	offset++; // Skip null terminator
 	const qtype = (queryData[offset] << 8) | queryData[offset + 1];
 
-	// Get IP prefix for ECS-aware caching
+	// Get IP prefix for ECS-aware caching (matches the ECS prefix sent upstream)
 	let ipPrefix = 'none';
 	if (clientIp) {
 		if (isIPv4(clientIp)) {
 			// Use /24 prefix
 			ipPrefix = clientIp.split('.').slice(0, 3).join('.');
 		} else if (isIPv6(clientIp)) {
-			// Use /48 prefix (first 3 segments)
-			ipPrefix = clientIp.split(':').slice(0, 3).join(':');
+			// Use /48 prefix = first 12 hex chars of the expanded address
+			ipPrefix = ipv6ToHex(clientIp).slice(0, 12);
 		}
 	}
 
@@ -766,11 +796,11 @@ function generateDnsCacheKey(queryData: Uint8Array, clientIp: string | null): st
 }
 
 /**
- * Update DNS response cache with LRU eviction.
+ * Update DNS response cache with LRU eviction. An existing key only refreshes
+ * its position — it never evicts an unrelated entry.
  */
 function updateDnsCache(key: string, data: ArrayBuffer, ttlSeconds: number): void {
-	// LRU: Remove oldest if at capacity
-	if (DNS_CACHE.size >= DNS_CACHE_MAX_SIZE) {
+	if (!DNS_CACHE.has(key) && DNS_CACHE.size >= DNS_CACHE_MAX_SIZE) {
 		const oldestKey = DNS_CACHE.keys().next().value;
 		if (oldestKey) DNS_CACHE.delete(oldestKey);
 	}
@@ -784,18 +814,10 @@ function updateDnsCache(key: string, data: ArrayBuffer, ttlSeconds: number): voi
 }
 
 /**
- * Update L2 Cache API with DNS response.
- * @param cacheKey - The cache key
- * @param buffer - DNS response buffer
- * @param ttl - TTL in seconds
- * @param waitForComplete - If true, await the cache.put; otherwise fire-and-forget
+ * Update L2 Cache API with DNS response. X-Original-Ttl lets later hits age
+ * the answer TTLs by the time spent in cache.
  */
-async function updateL2Cache(
-	cacheKey: string,
-	buffer: ArrayBuffer,
-	ttl: number,
-	waitForComplete: boolean = false
-): Promise<void> {
+async function updateL2Cache(cacheKey: string, buffer: ArrayBuffer, ttl: number): Promise<void> {
 	const cache = caches.default;
 	const cacheUrl = new Request(`https://dns-cache.internal/${cacheKey}`);
 	const cacheResponse = new Response(buffer, {
@@ -803,17 +825,14 @@ async function updateL2Cache(
 			'Content-Type': 'application/dns-message',
 			'Cache-Control': `max-age=${ttl}`,
 			'X-Expires-At': `${Date.now() + ttl * 1000}`,
+			'X-Original-Ttl': `${ttl}`,
 		},
 	});
 
-	const updatePromise = cache.put(cacheUrl, cacheResponse).catch((err) => {
+	await cache.put(cacheUrl, cacheResponse).catch((err) => {
 		STATS.errors++;
 		log(`Cache put failed: ${err.message || err}`);
 	});
-
-	if (waitForComplete) {
-		await updatePromise;
-	}
 }
 
 /**
@@ -821,17 +840,19 @@ async function updateL2Cache(
  */
 async function prefetchDns(queryData: Uint8Array, clientIp: string | null, cacheKey: string): Promise<void> {
 	try {
-		const response = await queryDnsUpstream(queryData, clientIp);
-		const buffer = await response.arrayBuffer();
-
+		const buffer = await queryDnsUpstream(queryData, clientIp);
 		const dnsResponse = parseDnsResponse(buffer);
-		if (dnsResponse.answers.length > 0) {
-			const ttl = Math.min(Math.max(dnsResponse.minTtl, DNS_CACHE_CONFIG.minTtl), DNS_CACHE_CONFIG.maxTtl);
+		const rcode = dnsResponse.flags & 0xf;
+
+		let ttl: number | null = null;
+		if (rcode === 0 && dnsResponse.answers.length > 0) {
+			ttl = Math.min(Math.max(dnsResponse.minTtl, DNS_CACHE_CONFIG.minTtl), DNS_CACHE_CONFIG.maxTtl);
+		} else if (rcode === 3) {
+			ttl = DNS_CACHE_CONFIG.negativeTtl; // keep negative entries fresh too
+		}
+		if (ttl !== null) {
 			updateDnsCache(cacheKey, buffer, ttl);
-
-			// Also update L2 cache (wait for completion in prefetch)
-			await updateL2Cache(cacheKey, buffer, ttl, true);
-
+			await updateL2Cache(cacheKey, buffer, ttl);
 			log(`DNS Prefetch completed: ${cacheKey}, TTL: ${ttl}s`);
 		}
 	} catch (err) {
@@ -841,227 +862,89 @@ async function prefetchDns(queryData: Uint8Array, clientIp: string | null, cache
 }
 
 /**
- * Query upstream DNS servers with failover.
+ * One upstream attempt in the staggered race. Module-level (not a closure)
+ * to keep cognitive complexity low and the attempt logic independently readable.
  */
-async function queryDnsUpstream(queryData: Uint8Array, clientIp: string | null): Promise<Response> {
+interface UpstreamRaceState {
+	settled: boolean;
+	controllers: AbortController[];
+	lastServfail: ArrayBuffer | null;
+}
+
+async function fetchUpstreamAttempt(endpoint: string, body: Uint8Array, delayMs: number, state: UpstreamRaceState, start: number): Promise<ArrayBuffer> {
+	if (delayMs > 0) {
+		await new Promise((resolve) => setTimeout(resolve, delayMs));
+	}
+	if (state.settled) {
+		throw new Error('race already settled'); // winner decided; skip the backup
+	}
+	const controller = new AbortController();
+	state.controllers.push(controller);
+	const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+	try {
+		STATS.dns.upstreamFetches++;
+		const response = await fetch(endpoint, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/dns-message' },
+			body,
+			signal: controller.signal,
+		});
+		if (!response.ok) {
+			log(`Upstream ${endpoint} returned HTTP ${response.status}`);
+			throw new Error(`HTTP ${response.status}`);
+		}
+		// Body read stays inside the abort window (no un-timed-out read)
+		const buffer = await response.arrayBuffer();
+		if (buffer.byteLength < 12) {
+			throw new Error('short DNS response');
+		}
+		const rcode = new Uint8Array(buffer)[3] & 0xf;
+		if (rcode === 2) {
+			state.lastServfail = buffer; // keep as last-resort answer
+			throw new Error('SERVFAIL'); // try the other upstream
+		}
+		log(`DNS Query via ${endpoint}: ${Date.now() - start}ms`);
+		return buffer;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+/**
+ * Query upstream DNS servers: staggered race (primary first, backup after
+ * UPSTREAM_RACE_DELAY_MS if the primary is slow), short per-attempt timeout,
+ * failover on HTTP errors, timeouts, short bodies and SERVFAIL. If every
+ * upstream SERVFAILs, the last response is returned (uncached) so the client
+ * still receives a well-formed DNS answer.
+ */
+async function queryDnsUpstream(queryData: Uint8Array, clientIp: string | null): Promise<ArrayBuffer> {
 	let newQueryData = queryData;
 	if (clientIp) {
 		const [headerAndQuestion] = extractHeaderAndQuestion(queryData);
 		const optRecord = createOptRecord(clientIp);
-		newQueryData = combineQueryData(headerAndQuestion, optRecord);
+		newQueryData = combineQueryData(headerAndQuestion, optRecord, FORCE_AD);
 	}
 
 	const start = Date.now();
+	const state: UpstreamRaceState = { settled: false, controllers: [], lastServfail: null };
 
-	// Try each upstream in order
-	for (const endpoint of UPSTREAM_ENDPOINTS) {
-		try {
-			const controller = new AbortController();
-			const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
-
-			const response = await fetch(endpoint, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/dns-message' },
-				body: newQueryData,
-				signal: controller.signal,
-			});
-
-			clearTimeout(timeout);
-
-			if (response.ok) {
-				log(`DNS Query via ${endpoint}: ${Date.now() - start}ms`);
-				return response;
-			}
-			log(`Upstream ${endpoint} returned HTTP ${response.status}`);
-		} catch (err) {
-			const error = err as Error;
-			log(`Upstream ${endpoint} failed: ${error.message}`);
-			// Continue to next upstream
+	try {
+		return await Promise.any(
+			UPSTREAM_ENDPOINTS.map((endpoint, i) => fetchUpstreamAttempt(endpoint, newQueryData, i * UPSTREAM_RACE_DELAY_MS, state, start))
+		);
+	} catch {
+		if (state.lastServfail) {
+			log('All upstreams returned SERVFAIL; serving last response uncached');
+			return state.lastServfail;
+		}
+		STATS.errors++;
+		throw new Error('All DNS upstreams failed');
+	} finally {
+		state.settled = true;
+		for (const controller of state.controllers) {
+			controller.abort(); // cancel losing/lingering fetches
 		}
 	}
-
-	// All upstreams failed
-	STATS.errors++;
-	throw new Error('All DNS upstreams failed');
-}
-
-// ============================================================
-// DNS Packet Manipulation
-// ============================================================
-
-function extractHeaderAndQuestion(data: Uint8Array): [Uint8Array, number] {
-	let offset = 12; // DNS header is 12 bytes
-	const qdcount = (data[4] << 8) | data[5];
-
-	for (let i = 0; i < qdcount; i++) {
-		while (offset < data.length && data[offset] !== 0) offset++;
-		offset += 5;
-	}
-
-	return [data.subarray(0, offset), offset];
-}
-
-function createOptRecord(clientIp: string): Uint8Array {
-	let ecsData: number[];
-	let family: number;
-
-	if (isIPv4(clientIp)) {
-		const ipParts = clientIp.split('.').map((part) => Number.parseInt(part, 10));
-		// Validate IPv4 octets are in valid range
-		if (ipParts.some((p) => p < 0 || p > 255 || Number.isNaN(p))) {
-			throw new Error('Invalid IPv4 address: octet out of range');
-		}
-		family = 1;
-		const prefixLength = 24; // Use /24 for better CDN locality
-		ecsData = [0, 8, 0, 7, 0, family, prefixLength, 0, ...ipParts.slice(0, 3)];
-	} else if (isIPv6(clientIp)) {
-		const ipParts = ipv6ToBytes(clientIp);
-		if (ipParts.length !== 16) {
-			throw new Error('Invalid IPv6 address: incorrect byte length');
-		}
-		family = 2;
-		const prefixLength = 48; // Use /48 for IPv6
-		ecsData = [0, 8, 0, 10, 0, family, prefixLength, 0, ...ipParts.slice(0, 6)];
-	} else {
-		throw new Error('Invalid IP address format');
-	}
-
-	return new Uint8Array([0, 0, 41, 16, 0, 0, 0, 0, 0, 0, ecsData.length, ...ecsData]);
-}
-
-function combineQueryData(headerAndQuestion: Uint8Array, optRecord: Uint8Array): Uint8Array {
-	const newQueryData = new Uint8Array(headerAndQuestion.length + optRecord.length);
-	newQueryData.set(headerAndQuestion, 0);
-	newQueryData.set(optRecord, headerAndQuestion.length);
-	newQueryData[3] |= 0x20; // set AD; preserve the client's CD/Z bits
-	newQueryData.set([1], 11); // ARCOUNT = 1 (the OPT record)
-	return newQueryData;
-}
-
-// ============================================================
-// IP Address Utilities
-// ============================================================
-
-function isIPv4(ip: string): boolean {
-	// Validate IPv4: split and check each octet is 0-255
-	const parts = ip.split('.');
-	if (parts.length !== 4) return false;
-	for (const part of parts) {
-		const num = Number.parseInt(part, 10);
-		if (Number.isNaN(num) || num < 0 || num > 255 || part !== String(num)) return false;
-	}
-	return true;
-}
-
-/**
- * Normalize a trailing IPv4-mapped segment (e.g. ::ffff:1.2.3.4) into two
- * hex groups. Returns null when a mapped suffix is present but invalid.
- */
-function normalizeIPv6(ip: string): string | null {
-	const mapped = ip.match(/^(.*:)((?:\d{1,3}\.){3}\d{1,3})$/);
-	if (!mapped) return ip;
-	if (!isIPv4(mapped[2])) return null;
-	const o = mapped[2].split('.').map((p) => Number.parseInt(p, 10));
-	const hi = (((o[0] << 8) | o[1]) >>> 0).toString(16);
-	const lo = (((o[2] << 8) | o[3]) >>> 0).toString(16);
-	return mapped[1] + hi + ':' + lo;
-}
-
-function isIPv6(ip: string): boolean {
-	if (!ip.includes(':')) return false;
-	if (ip.includes(':::')) return false;
-	// Exactly one '::' at most
-	if ((ip.match(/::/g) || []).length > 1) return false;
-	// A lone leading/trailing ':' (not part of '::') is invalid
-	if ((ip.startsWith(':') && !ip.startsWith('::')) || (ip.endsWith(':') && !ip.endsWith('::'))) return false;
-	const normalized = normalizeIPv6(ip);
-	if (normalized === null) return false;
-	const parts = normalized.split(':');
-	const hasDoubleColon = normalized.includes('::');
-	let groups = 0;
-	for (const part of parts) {
-		if (part === '') continue; // empty stems from '::'
-		if (!/^[0-9a-fA-F]{1,4}$/.test(part)) return false;
-		groups++;
-	}
-	// Without '::' exactly 8 groups are required; with '::' at most 7
-	return hasDoubleColon ? groups <= 7 : groups === 8 && parts.length === 8;
-}
-
-function ip4ToNumber(ip: string): number {
-	return (
-		ip.split('.').reduce((int, octet) => {
-			return (int << 8) + Number.parseInt(octet, 10);
-		}, 0) >>> 0
-	);
-}
-/**
- * Find the index of :: (double colon) in IPv6 parts.
- */
-function findDoubleColonIndex(parts: string[]): number {
-	for (let i = 1; i < parts.length - 1; i++) {
-		if (parts[i] === '') return i;
-	}
-	return -1;
-}
-
-/**
- * Expand IPv6 parts into 8 full segments, handling :: expansion.
- */
-function expandIPv6Segments(parts: string[]): string[] {
-	const doubleColonIndex = findDoubleColonIndex(parts);
-	const segments: string[] = [];
-
-	for (let i = 0; i < parts.length; i++) {
-		const part = parts[i];
-
-		if (part === '') {
-			// Handle :: expansion at the double colon position
-			if (i === doubleColonIndex) {
-				const nonEmptyCount = parts.filter((p) => p !== '').length;
-				const zerosNeeded = 8 - nonEmptyCount;
-				segments.push(...new Array(zerosNeeded).fill('0000'));
-			}
-			// Skip leading/trailing empty strings from split
-			continue;
-		}
-
-		segments.push(part.padStart(4, '0'));
-	}
-
-	// Pad to exactly 8 segments
-	while (segments.length < 8) {
-		segments.push('0000');
-	}
-
-	return segments;
-}
-
-/**
- * Convert 8 hex segments to 16 bytes.
- */
-function segmentsToBytes(segments: string[]): number[] {
-	const bytes: number[] = [];
-	for (let i = 0; i < 8; i++) {
-		const value = Number.parseInt(segments[i] || '0000', 16);
-		bytes.push((value >> 8) & 0xff, value & 0xff);
-	}
-	return bytes;
-}
-
-function ipv6ToBytes(ipv6: string): number[] {
-	const normalized = normalizeIPv6(ipv6);
-	if (normalized === null) {
-		throw new Error('Invalid IPv6 address: bad IPv4-mapped suffix');
-	}
-	const parts = normalized.split(':');
-	const segments = expandIPv6Segments(parts);
-	return segmentsToBytes(segments);
-}
-
-function ipv6ToHex(ipv6: string): string {
-	const bytes = ipv6ToBytes(ipv6);
-	return bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // ============================================================
@@ -1074,14 +957,17 @@ async function ip2country(ip: string, ctx: ExecutionContext): Promise<string | n
 		return null;
 	}
 
-	// L1: Memory Cache
-	if (MEM_CACHE.has(ip)) {
-		const country = MEM_CACHE.get(ip)!;
+	// L1: Memory Cache (entries carry the same TTL as L2)
+	const entry = MEM_CACHE.get(ip);
+	if (entry && entry.expires > Date.now()) {
 		// LRU: Refresh position
 		MEM_CACHE.delete(ip);
-		MEM_CACHE.set(ip, country);
+		MEM_CACHE.set(ip, entry);
 		STATS.cache.memHits++;
-		return country;
+		return entry.country;
+	}
+	if (entry) {
+		MEM_CACHE.delete(ip); // expired
 	}
 
 	// L2: Cache API
@@ -1119,14 +1005,20 @@ async function ip2country(ip: string, ctx: ExecutionContext): Promise<string | n
 		// Store in L1
 		updateMemCache(ip, country);
 
-		// Store in L2 (async, don't block response)
+		// Store in L2 (async, don't block response; failures are counted, not
+		// left as unhandled rejections inside waitUntil)
 		ctx.waitUntil(
-			cache.put(
-				cacheKey,
-				new Response(country, {
-					headers: { 'Cache-Control': `max-age=${CACHE_TTL_SECONDS}` },
+			cache
+				.put(
+					cacheKey,
+					new Response(country, {
+						headers: { 'Cache-Control': `max-age=${CACHE_TTL_SECONDS}` },
+					})
+				)
+				.catch((err) => {
+					STATS.errors++;
+					log(`Geoip cache put failed: ${err.message || err}`);
 				})
-			)
 		);
 	}
 
@@ -1142,7 +1034,7 @@ function updateMemCache(ip: string, country: string): void {
 		const oldestKey = MEM_CACHE.keys().next().value;
 		if (oldestKey) MEM_CACHE.delete(oldestKey);
 	}
-	MEM_CACHE.set(ip, country);
+	MEM_CACHE.set(ip, { country, expires: Date.now() + CACHE_TTL_SECONDS * 1000 });
 }
 
 async function ip2countryIPv4(ip: string): Promise<string | null> {
@@ -1163,109 +1055,4 @@ async function ip2countryIPv6(ip: string): Promise<string | null> {
 		.bind(hexIp)
 		.first<GeoIpResult>();
 	return result?.country_iso_code ?? null;
-}
-
-// ============================================================
-// DNS Response Parser (A + AAAA Records)
-// ============================================================
-
-// DNS Record Types
-const DNS_TYPE_A = 1;
-const DNS_TYPE_AAAA = 28;
-
-/**
- * Skip a DNS name (handles both compressed and uncompressed formats).
- * Returns the new offset after skipping the name.
- */
-function skipDnsName(data: Uint8Array, offset: number): number {
-	if (offset < data.length && (data[offset] & 0xc0) === 0xc0) {
-		return offset + 2; // Compressed name pointer
-	}
-	while (offset < data.length && data[offset] !== 0) offset++;
-	return offset + 1;
-}
-
-/**
- * Parse an A record (IPv4) from the DNS response.
- */
-function parseARecord(data: Uint8Array, offset: number, ttl: number): DnsAnswer {
-	const ip = `${data[offset]}.${data[offset + 1]}.${data[offset + 2]}.${data[offset + 3]}`;
-	return { type: 'A', ip, ttl };
-}
-
-/**
- * Parse an AAAA record (IPv6) from the DNS response.
- */
-function parseAAAARecord(data: Uint8Array, offset: number, ttl: number): DnsAnswer {
-	const parts: string[] = [];
-	for (let j = 0; j < 8; j++) {
-		const segment = (data[offset + j * 2] << 8) | data[offset + j * 2 + 1];
-		parts.push(segment.toString(16));
-	}
-	return { type: 'AAAA', ip: parts.join(':'), ttl };
-}
-
-/**
- * Parse a single DNS answer record.
- * Returns { answer, newOffset } where answer may be null for unsupported record types.
- */
-function parseAnswerRecord(data: Uint8Array, offset: number): { answer: DnsAnswer | null; newOffset: number } {
-	offset = skipDnsName(data, offset);
-
-	const type = (data[offset] << 8) | data[offset + 1];
-	// TTL is at offset+4 to offset+7 (4 bytes, big-endian)
-	const ttl = (data[offset + 4] << 24) | (data[offset + 5] << 16) | (data[offset + 6] << 8) | data[offset + 7];
-	const dataLen = (data[offset + 8] << 8) | data[offset + 9];
-	offset += 10; // Skip type(2) + class(2) + TTL(4) + dataLen(2)
-
-	let answer: DnsAnswer | null = null;
-	if (type === DNS_TYPE_A && dataLen === 4) {
-		answer = parseARecord(data, offset, ttl);
-	} else if (type === DNS_TYPE_AAAA && dataLen === 16) {
-		answer = parseAAAARecord(data, offset, ttl);
-	}
-
-	return { answer, newOffset: offset + dataLen };
-}
-
-/**
- * Parse DNS response buffer.
- * Optimized: uses DataView for header parsing and calculates minTtl in-loop.
- */
-function parseDnsResponse(buffer: ArrayBuffer): DnsResponse {
-	const data = new Uint8Array(buffer);
-	const view = new DataView(buffer);
-	let offset = 0;
-
-	// Parse header (12 bytes) - using DataView for cleaner 16-bit reads
-	const id = view.getUint16(0);
-	const flags = view.getUint16(2);
-	const qdCount = view.getUint16(4);
-	const anCount = view.getUint16(6);
-	const nsCount = view.getUint16(8);
-	const arCount = view.getUint16(10);
-	offset = 12;
-
-	// Skip question section
-	for (let i = 0; i < qdCount; i++) {
-		offset = skipDnsName(data, offset) + 4; // Skip QTYPE(2) + QCLASS(2)
-	}
-
-	// Parse answer section with inline minTtl calculation
-	const answers: DnsAnswer[] = [];
-	let minTtl = Infinity;
-
-	for (let i = 0; i < anCount; i++) {
-		const { answer, newOffset } = parseAnswerRecord(data, offset);
-		if (answer) {
-			answers.push(answer);
-			if (answer.ttl < minTtl) minTtl = answer.ttl;
-		}
-		offset = newOffset;
-	}
-
-	// Finalize minTtl (0 if no answers)
-	const finalMinTtl = minTtl === Infinity ? 0 : minTtl;
-
-	return { id, flags, qdCount, anCount, nsCount, arCount, answers, minTtl: finalMinTtl };
 }
