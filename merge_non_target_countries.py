@@ -76,8 +76,10 @@ def merge_non_target_countries(source_db, target_db, target_countries):
     tgt_conn.close()
     print(f"Filtered database created: {target_db}")
 
-# Example usage
-merge_non_target_countries("./tmp/geolite2-contry.db", "./tmp/filtered.db", ["CN", "HK", "JP"])
+# Example usage (legacy reference only — guarded so importing this module
+# never touches the filesystem)
+if __name__ == '__main__':
+    merge_non_target_countries("./tmp/geolite2-contry.db", "./tmp/filtered.db", ["CN", "HK", "JP"])
 
 # Check results
 # sqlite3 -readonly tmp/geolite2-contry.db "SELECT country_iso_code, count(*) FROM merged_ipv4_data GROUP BY country_iso_code ORDER BY count(*);"

@@ -65,6 +65,7 @@ EXPORT_PAGE = 10_000  # rows per keyset page (conservative; D1 JSON result limit
 # 2026-10-23: non-zero rc, empty stderr). Retry a few times; SQL is idempotent.
 WRANGLER_ATTEMPTS = 3
 WRANGLER_RETRY_SLEEP = 2.0
+WRANGLER_TIMEOUT_S = 600  # per wrangler invocation; a hung process must not eat the CI budget
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -108,8 +109,26 @@ class SqliteD1:
         return [dict(r) for r in self.con.execute(sql).fetchall()]
 
     def execute_sql(self, sql):
-        self.con.executescript(sql)
-        self.con.commit()
+        # D1 --file imports are whole-file atomic (probe M7); mirror that here
+        # so dry-run failure paths behave like production. executescript would
+        # auto-commit statement by statement, so run complete statements inside
+        # one explicit transaction instead. The toolchain emits one statement
+        # per logical unit (multi-line DDL accumulates until its ';').
+        import sqlite3
+        self.con.execute('BEGIN')
+        try:
+            buf = ''
+            for line in sql.splitlines(keepends=True):
+                buf += line
+                if sqlite3.complete_statement(buf):
+                    self.con.execute(buf)
+                    buf = ''
+            if buf.strip():
+                self.con.execute(buf)
+            self.con.commit()
+        except BaseException:
+            self.con.rollback()
+            raise
 
     def execute_file(self, path):
         with open(validated_path(path, must_exist=True), encoding='utf-8') as f:
@@ -158,13 +177,23 @@ class WranglerD1:
         # internally from literal-escaped values (sql_str / HEX32_RE / int).
         proc = None
         for attempt in range(1, WRANGLER_ATTEMPTS + 1):
-            proc = subprocess.run(cmd, capture_output=True, text=True, cwd=HERE)  # NOSONAR
-            if proc.returncode == 0:
-                return proc
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, cwd=HERE,
+                                      timeout=WRANGLER_TIMEOUT_S)  # NOSONAR
+            except subprocess.TimeoutExpired:
+                proc = None
+                detail = f'timeout after {WRANGLER_TIMEOUT_S}s'
+            else:
+                if proc.returncode == 0:
+                    return proc
+                detail = f'rc={proc.returncode}'
             if attempt < WRANGLER_ATTEMPTS:
-                print(f'wrangler rc={proc.returncode}, retry {attempt}/{WRANGLER_ATTEMPTS}',
+                print(f'wrangler {detail}, retry {attempt}/{WRANGLER_ATTEMPTS}',
                       file=sys.stderr)
                 time.sleep(WRANGLER_RETRY_SLEEP * attempt)
+        if proc is None:
+            raise SyncError(f'wrangler timed out after {WRANGLER_ATTEMPTS} attempts '
+                            f'({WRANGLER_TIMEOUT_S}s each): d1 execute {self.db}')
         return proc
 
     @staticmethod
@@ -203,7 +232,8 @@ class WranglerD1:
         # automatic rollback convenience does.
         proc = subprocess.run(['npx', '--no-install', 'wrangler', 'd1',
                                'time-travel', 'info', self.db, '--json'],
-                              capture_output=True, text=True, cwd=HERE)
+                              capture_output=True, text=True, cwd=HERE,
+                              timeout=WRANGLER_TIMEOUT_S)
         m = re.search(r'"bookmark"\s*:\s*"([^"]+)"', proc.stdout + proc.stderr)
         if proc.returncode != 0 or not m:
             self._fail('time-travel info failed', self.db, proc)
@@ -213,7 +243,8 @@ class WranglerD1:
         proc = subprocess.run(['npx', '--no-install', 'wrangler', 'd1',
                                'time-travel', 'restore', self.db,
                                '--bookmark', bookmark, '-y'],
-                              capture_output=True, text=True, cwd=HERE)
+                              capture_output=True, text=True, cwd=HERE,
+                              timeout=WRANGLER_TIMEOUT_S)
         if proc.returncode != 0:
             self._fail('time-travel restore failed', self.db, proc)
 
@@ -261,28 +292,54 @@ def build_merged(mmdb, work):
             os.path.join(out, 'blocks_ipv6_merged.csv'))
 
 
+def _load_probe_keys(csv_path, is_v4):
+    keys = []
+    with open(validated_path(csv_path, must_exist=True), newline='', encoding='utf-8') as f:
+        for r in csv.reader(f):
+            if r:
+                keys.append((int(r[0]) if is_v4 else r[0], r[1]))
+    return keys
+
+
+def _probe_family(db, table, keys, is_v4, rng, n):
+    bad = 0
+    for k, expect in rng.sample(keys, min(n, len(keys))):  # NOSONAR - verification probes only
+        lit = str(k) if is_v4 else sql_str(k)
+        rows = db.query(f'SELECT country_iso_code FROM {table} '
+                        f'WHERE network_start <= {lit} '
+                        f'ORDER BY network_start DESC LIMIT 1')
+        got = rows[0]['country_iso_code'] if rows else None
+        if got != expect:
+            bad += 1
+            if bad <= 3:
+                print(f'  probe mismatch: {table} key={k} db={got} target={expect}',
+                      file=sys.stderr)
+    return bad
+
+
 def probe_check(db, v4csv, v6csv, n_probes=200, seed=11):
     """Sample exact target keys and run the worker's lookup query against D1."""
     rng = random.Random(seed)  # NOSONAR - seeded probes for deterministic verification, not a security context
     bad = 0
     for csv_path, table, is_v4 in ((v4csv, V4_TABLE, True), (v6csv, V6_TABLE, False)):
-        keys = []
-        with open(validated_path(csv_path, must_exist=True), newline='', encoding='utf-8') as f:
-            for r in csv.reader(f):
-                if r:
-                    keys.append((int(r[0]) if is_v4 else r[0], r[1]))
-        for k, expect in rng.sample(keys, min(n_probes // 2, len(keys))):  # NOSONAR - verification probes only
-            lit = str(k) if is_v4 else sql_str(k)
-            rows = db.query(f'SELECT country_iso_code FROM {table} '
-                            f'WHERE network_start <= {lit} '
-                            f'ORDER BY network_start DESC LIMIT 1')
-            got = rows[0]['country_iso_code'] if rows else None
-            if got != expect:
-                bad += 1
-                if bad <= 3:
-                    print(f'  probe mismatch: {table} key={k} db={got} target={expect}',
-                          file=sys.stderr)
+        keys = _load_probe_keys(csv_path, is_v4)
+        bad += _probe_family(db, table, keys, is_v4, rng, n_probes // 2)
     return bad
+
+
+def _export_page(db, table, cursor, is_v4):
+    lit = str(cursor) if is_v4 else sql_str(cursor)
+    return db.query(f'SELECT network_start, country_iso_code FROM {table} '
+                    f'WHERE network_start > {lit} '
+                    f'ORDER BY network_start LIMIT {EXPORT_PAGE}')
+
+
+def _next_cursor(last, is_v4):
+    if is_v4:
+        return int(last)
+    if not HEX32_RE.match(str(last)):
+        raise SyncError(f'invalid IPv6 key during export: {last!r}')
+    return str(last)
 
 
 def export_table(db, table, out_csv, is_v4):
@@ -294,21 +351,12 @@ def export_table(db, table, out_csv, is_v4):
     with open(validated_path(out_csv), 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
         while True:
-            lit = str(cursor) if is_v4 else sql_str(cursor)
-            rows = db.query(f'SELECT network_start, country_iso_code FROM {table} '
-                            f'WHERE network_start > {lit} '
-                            f'ORDER BY network_start LIMIT {EXPORT_PAGE}')
+            rows = _export_page(db, table, cursor, is_v4)
             if not rows:
                 break
             for r in rows:
                 w.writerow([r['network_start'], r['country_iso_code']])
-            last = rows[-1]['network_start']
-            if is_v4:
-                cursor = int(last)
-            else:
-                if not HEX32_RE.match(str(last)):
-                    raise SyncError(f'invalid IPv6 key during export: {last!r}')
-                cursor = str(last)
+            cursor = _next_cursor(rows[-1]['network_start'], is_v4)
             n += len(rows)
             if len(rows) < EXPORT_PAGE:
                 break
@@ -353,6 +401,10 @@ def run_bootstrap(db, args, work, tag, sha, mmdb):
     ensure_schema(db)
     pinned = meta_get(db, 'bootstrap_tag')
     if pinned and pinned != tag:
+        if args.dry_run and args.mmdb:
+            raise SyncError(f'bootstrap pinned to {pinned} but --mmdb override targets {tag}; '
+                            'use a matching --tag/--mmdb or a fresh --sqlite-path '
+                            '(offline mode will not download the pinned release)')
         print(f'bootstrap pinned to {pinned}; ignoring newer release {tag} until complete')
         tag, sha, mmdb = resolve_source(args.__class__(**{**vars(args), 'mmdb': None, 'tag': pinned}), work)
     if not pinned:
@@ -369,7 +421,13 @@ def run_bootstrap(db, args, work, tag, sha, mmdb):
     applied_now = 0
     for ch in manifest['chunks']:
         marker = ch['file'].removesuffix('.sql')
-        if meta_get(db, marker):
+        existing = meta_get(db, marker)
+        if existing is not None:
+            expected_marker = f'{ch["sha"]}:{ch["rows"]}'
+            if existing != expected_marker:
+                raise SyncError(f'chunk marker mismatch for {marker}: db={existing!r} '
+                                f'manifest={expected_marker!r} — dataset changed mid-bootstrap? '
+                                'manual inspection required')
             continue
         if applied_now >= args.chunks_per_run:
             print(f'quota guard: {args.chunks_per_run} chunk(s) per run; resume next run')
@@ -402,10 +460,14 @@ def run_converge(db, args, work, tag, sha, mmdb):
     if cur_tag == tag and cur_sha == sha:
         c4, c6 = table_count(db, V4_TABLE), table_count(db, V6_TABLE)
         bad = probe_check(db, v4csv, v6csv, n_probes=64)
-        if (c4, c6) != (e4, e6) or bad:
-            raise SyncError(f'verify-only DRIFT: counts db=({c4},{c6}) expected=({e4},{e6}) probes_bad={bad}')
-        print(f'up to date with {tag} (v4={c4} v6={c6}, probes ok) — 0 writes')
-        return 'uptodate'
+        if (c4, c6) == (e4, e6) and not bad:
+            print(f'up to date with {tag} (v4={c4} v6={c6}, probes ok) — 0 writes')
+            return 'uptodate'
+        # Drift with a matching tag (e.g. a failed restore after a bad apply)
+        # must self-heal, not fail identically every day: fall through to the
+        # normal convergence path (export -> gated delta -> verify).
+        print(f'verify-only DRIFT: counts db=({c4},{c6}) expected=({e4},{e6}) '
+              f'probes_bad={bad} — falling through to convergence', file=sys.stderr)
 
     print(f'converging {cur_tag} -> {tag}')
     live4, live6 = os.path.join(work, 'live_v4.csv'), os.path.join(work, 'live_v6.csv')
@@ -462,6 +524,17 @@ def main():
 
     if not args.dry_run and not args.db:
         print('Error: --db is required unless --dry-run', file=sys.stderr)
+        return EXIT_ERROR
+
+    if args.chunks_per_run < 1:
+        print('Error: --chunks-per-run must be >= 1', file=sys.stderr)
+        return EXIT_ERROR
+    if not args.dry_run and args.chunks_per_run > 1:
+        # Free plan: one ~72.6k-row chunk/day fits the 100k rows_written quota;
+        # two chunks (~145k) hard-fail it. Only Workers Paid may raise this.
+        print('Error: free plan allows --chunks-per-run 1 only '
+              '(2 chunks ~145k rows > 100k daily quota); raise only under Workers Paid',
+              file=sys.stderr)
         return EXIT_ERROR
 
     work = validated_path(args.work)

@@ -10,8 +10,8 @@ set -o pipefail
 : "${WORKERS_DEV:=true}"
 
 # Cloudflare credentials are still required for D1 operations
-if [ -z "$CLOUDFLARE_ACCOUNT_ID" ] || [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-    echo "Error: Please set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN"
+if [[ -z "$CLOUDFLARE_ACCOUNT_ID" || -z "$CLOUDFLARE_API_TOKEN" ]]; then
+    echo "Error: Please set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN" >&2
     exit 1
 fi
 
@@ -25,27 +25,29 @@ retry_with_backoff() {
     local retry=0
     local delay=2
     
-    while [ $retry -lt $max_retries ]; do
+    while [[ $retry -lt $max_retries ]]; do
         if "$@"; then
             return 0
         fi
-        
+
         retry=$((retry + 1))
-        if [ $retry -lt $max_retries ]; then
+        if [[ $retry -lt $max_retries ]]; then
             echo "Retry $retry/$max_retries in ${delay}s..."
             sleep $delay
             delay=$((delay * 2))
         fi
     done
-    
-    echo "Error: Failed after $max_retries attempts"
+
+    echo "Error: Failed after $max_retries attempts" >&2
     return 1
 }
 
-# Prepare workspace (clean old tmp if exists)
-rm -rf tmp
-mkdir -p tmp
-cd tmp
+# Prepare a DEDICATED workspace (never rm -rf the whole tmp/ — the daily
+# geoip-sync job keeps its state there and the two workflows can overlap).
+WORKSPACE=tmp/legacy_import
+rm -rf "$WORKSPACE"
+mkdir -p "$WORKSPACE"
+cd "$WORKSPACE"
 
 database_filename=geoip.db
 merged_ipv4_table="merged_ipv4_data"
@@ -76,12 +78,18 @@ echo "Database version: $database_version"
 # Step 2: Extract data using Python script
 # ============================================================
 echo "Extracting data from MMDB..."
-python3 ../extract_mmdb.py Country.mmdb blocks_ipv4.csv blocks_ipv6.csv
+python3 ../../extract_mmdb.py Country.mmdb blocks_ipv4.csv blocks_ipv6.csv
 
 # ============================================================
 # Step 3: Create SQLite database (single session for both tables)
 # ============================================================
 echo "Creating SQLite database..."
+
+# Runner images may drop preinstalled tools across releases (ubuntu-26.04
+# migration); ensure the sqlite3 CLI exists before relying on it.
+if ! command -v sqlite3 > /dev/null 2>&1; then
+    sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3
+fi
 
 sqlite3 $database_filename <<EOF
 -- Create IPv4 table
@@ -136,7 +144,7 @@ echo "Exporting SQL dump..."
 # ============================================================
 # Step 5: Upload to Cloudflare D1
 # ============================================================
-if [ -z "$database_location" ]; then
+if [[ -z "$database_location" ]]; then
     database_location="weur"
 fi
 
@@ -161,20 +169,26 @@ echo "Generating wrangler.toml..."
 sed -e "s/^database_name =.*/database_name = \"$database\"/" \
     -e "s/^database_id =.*/database_id = \"$database_id\"/" \
     -e "s/^workers_dev =.*/workers_dev = $WORKERS_DEV/" \
-    ../wrangler.template.toml > wrangler.toml
+    ../../wrangler.template.toml > wrangler.toml
 
 # ============================================================
 # Step 7: Cleanup old databases (keep last 3)
 # ============================================================
 echo "Cleaning up old databases..."
 num_databases_retained=3
-# SAFETY: never touch the long-lived convergence DB (geoip_live*) — this
-# positional retention is legacy and will be deleted at Phase 4 cutover.
+# SAFETY (RUNBOOK §3.6): never touch the long-lived convergence DB
+# (geoip_live*) NOR the database currently bound in wrangler.toml.
+# Names sort chronologically (geoip_YYYYMMDD_*), so `head -n -3` deletes the
+# OLDEST entries beyond the newest 3 — the previous `tail -n +3` kept the
+# oldest 2 and deleted everything newer, including the live binding.
+# This whole legacy retention block disappears at Phase 4 cutover.
+bound_db=$(sed -n 's/^database_name *= *"\(.*\)"/\1/p' ../../wrangler.toml)
 npx --no-install wrangler d1 list --json | jq ".[].name" --raw-output \
-    | grep '^geoip_' | grep -v '^geoip_live' | tail -n +$num_databases_retained \
-    | while read db; do
+    | grep '^geoip_' | grep -v '^geoip_live' | grep -vxF "$bound_db" \
+    | head -n -"$num_databases_retained" \
+    | while read -r db; do
         echo "Deleting old database: $db"
-        npx --no-install wrangler d1 delete $db -y
+        npx --no-install wrangler d1 delete "$db" -y
     done
 
 echo "Import complete!"
