@@ -13,8 +13,9 @@ A Cloudflare Worker that optimizes CDN routing by intelligently handling EDNS Cl
 - **Privacy First**: Encrypts DNS queries via HTTPS, protecting against eavesdropping.
 - **D1 Database**: Uses Cloudflare D1 for efficient Geolocation lookups.
 - **IPv6 Support**: Full support for AAAA record parsing and IPv6 geolocation.
-- **Multi-Level Caching**: L1 (Memory) + L2 (Cache API) for ultra-low latency.
-- **Upstream Failover**: Automatic fallback between DNS upstreams (Cloudflare → Google).
+- **Multi-Level Caching**: L1 (Memory) + L2 (Cache API) for ultra-low latency; concurrent identical queries are deduplicated (single-flight), and cached answers have their TTLs aged by the time spent in cache.
+- **Upstream Failover**: Cloudflare primary, Google backup (300ms staggered race); automatic failover on timeout/HTTP errors/SERVFAIL, 2.5s per-attempt timeout.
+- **Abuse Protection**: Per-source-IP token-bucket rate limiting (default 100/10s, configurable/disableable), structural DNS query validation and a 64KB size cap (malformed 400 / oversized 413).
 
 ## Data Source
 
@@ -92,7 +93,14 @@ COUNTRY_PRIORITY = "CN,HK,TW,JP,SG,US"
 
 ### DoH Endpoint (RFC 8484)
 
-`GET/POST https://<your-worker-domain>/?dns=<BASE64_DNS_QUERY>`
+- **GET**: `https://<your-worker-domain>/dns-query?dns=<BASE64URL_DNS_QUERY>`
+  (base64url, unpadded; standard base64 also accepted)
+- **POST**: `https://<your-worker-domain>/dns-query` with the raw DNS query bytes
+  as the body, `Content-Type: application/dns-message` (max 64KB)
+
+Both return `application/dns-message`. Any path other than `/health`, `/stats`,
+`/resolve`, `/debug/ip/` is treated as a DoH entry point (including the legacy
+parameter path below).
 
 ### JSON DNS API
 
@@ -142,7 +150,7 @@ The DoH endpoint accepts requests in the following format:
 ### Example
 
 ```bash
-curl "https://doh.subdomain.workers.dev/client-ip/223.5.5.5/client-country/CN/alternative-ip/8.8.8.8/dns-query?dns=<BASE64_DNS_QUERY>"
+curl "https://doh.subdomain.workers.dev/client-ip/223.5.5.5/client-country/CN/alternative-ip/8.8.8.8/dns-query?dns=<BASE64URL_DNS_QUERY>"
 ```
 
 ## Local Development & Testing

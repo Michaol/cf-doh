@@ -13,8 +13,9 @@
 - **隐私优先**: 通过 HTTPS 加密 DNS 查询，防止窃听。
 - **D1 数据库**: 使用 Cloudflare D1 进行高效的地理位置查询。
 - **IPv6 支持**: 完整支持 AAAA 记录解析和 IPv6 地理定位。
-- **多级缓存**: L1（内存）+ L2（缓存 API）实现超低延迟。
-- **上游故障转移**: DNS 上游之间自动故障转移（Cloudflare → Google）。
+- **多级缓存**: L1（内存）+ L2（缓存 API）实现超低延迟；并发同键查询去重（single-flight），缓存命中按已缓存时长递减应答 TTL。
+- **上游故障转移**: Cloudflare 主、Google 备（300ms 错峰竞速）；超时/HTTP 错误/SERVFAIL 自动切换，单次尝试 2.5s 超时。
+- **滥用防护**: 每源 IP 令牌桶限流（默认 100/10s，可配置/关闭）、DNS 查询结构化校验与 64KB 大小上限（畸形 400 / 超大 413）。
 
 ## 数据源
 
@@ -92,7 +93,13 @@ COUNTRY_PRIORITY = "CN,HK,TW,JP,SG,US"
 
 ### DoH 端点 (RFC 8484)
 
-`GET/POST https://<your-worker-domain>/?dns=<BASE64_DNS_QUERY>`
+- **GET**: `https://<your-worker-domain>/dns-query?dns=<BASE64URL_DNS_QUERY>`
+  （base64url、无填充；也兼容标准 base64）
+- **POST**: `https://<your-worker-domain>/dns-query`，请求体为原始 DNS 查询字节，
+  `Content-Type: application/dns-message`（上限 64KB）
+
+两种方式均返回 `application/dns-message`。除 `/health`、`/stats`、`/resolve`、
+`/debug/ip/` 外的任意路径都按 DoH 入口处理（含下方 legacy 参数路径）。
 
 ### JSON DNS API
 
@@ -141,7 +148,7 @@ DoH 端点接受以下格式的请求：
 ### 示例
 
 ```bash
-curl "https://doh.subdomain.workers.dev/client-ip/223.5.5.5/client-country/CN/alternative-ip/8.8.8.8/dns-query?dns=<BASE64_DNS_QUERY>"
+curl "https://doh.subdomain.workers.dev/client-ip/223.5.5.5/client-country/CN/alternative-ip/8.8.8.8/dns-query?dns=<BASE64URL_DNS_QUERY>"
 ```
 
 ## 本地开发与测试
