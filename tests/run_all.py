@@ -18,6 +18,7 @@ import argparse
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -62,13 +63,22 @@ def wait_ready(port, log_path, timeout=90):
     return False
 
 
-def start_dev(port, log_path, extra=()):
+def free_port():
+    """Ask the OS for an unused port (avoids runner-image/service collisions
+    and races between our own two wrangler instances)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+def start_dev(port, inspector_port, log_path, extra=()):
     log = open(log_path, 'w', encoding='utf-8')
     kwargs = {}
     if os.name == 'nt':
         kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
     proc = subprocess.Popen(
-        [NPX, 'wrangler', 'dev', '--port', str(port), '--ip', '127.0.0.1', *extra],
+        [NPX, 'wrangler', 'dev', '--port', str(port), '--ip', '127.0.0.1',
+         '--inspector-port', str(inspector_port), *extra],
         cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, **kwargs)
     return proc, log
 
@@ -134,26 +144,37 @@ def main():
 
         servers = []
         if not failures:
-            main_proc, main_log = start_dev(8787, os.path.join(LOG_DIR, 'dev8787.log'),
+            # Sequential startup: the first instance must be ready before the
+            # second starts (simultaneous wrangler dev startup races on the
+            # shared dev registry / ports on CI runners).
+            main_port, rate_port = free_port(), free_port()
+            main_proc, main_log = start_dev(main_port, free_port(),
+                                            os.path.join(LOG_DIR, 'dev-main.log'),
                                             extra=('--persist-to', persist_main))
             servers.append((main_proc, main_log))
-            # Separate persistence dir: two workerd processes cannot share one
-            # local D1 sqlite file (SQLITE_BUSY). The rate-limit instance needs
-            # no geo seed — /resolve and /health work without D1 data.
-            rate_proc, rate_log = start_dev(8788, os.path.join(LOG_DIR, 'dev8788.log'),
-                                            extra=('--var', 'RATE_LIMIT_PER_10S:3',
-                                                   '--persist-to', persist_rate))
-            servers.append((rate_proc, rate_log))
-            if wait_ready(8787, os.path.join(LOG_DIR, 'dev8787.log')) and \
-               wait_ready(8788, os.path.join(LOG_DIR, 'dev8788.log')):
-                env = {**os.environ, 'BASE': 'http://127.0.0.1:8787',
-                       'RATE_BASE': 'http://127.0.0.1:8788'}
-                p = subprocess.run([PY, os.path.join(ROOT, 'tests', 'worker_tests.py')],
-                                   cwd=ROOT, env=env)
-                if p.returncode != 0:
-                    failures.append('worker-endpoints')
+            if wait_ready(main_port, os.path.join(LOG_DIR, 'dev-main.log')):
+                # Separate persistence dir: two workerd processes cannot share
+                # one local D1 sqlite file (SQLITE_BUSY). The rate-limit
+                # instance needs no geo seed — /resolve and /health work
+                # without D1 data.
+                rate_proc, rate_log = start_dev(rate_port, free_port(),
+                                                os.path.join(LOG_DIR, 'dev-rate.log'),
+                                                extra=('--var', 'RATE_LIMIT_PER_10S:3',
+                                                       '--persist-to', persist_rate))
+                servers.append((rate_proc, rate_log))
+                if wait_ready(rate_port, os.path.join(LOG_DIR, 'dev-rate.log')):
+                    env = {**os.environ, 'BASE': f'http://127.0.0.1:{main_port}',
+                           'RATE_BASE': f'http://127.0.0.1:{rate_port}'}
+                    p = subprocess.run([PY, os.path.join(ROOT, 'tests', 'worker_tests.py')],
+                                       cwd=ROOT, env=env)
+                    if p.returncode != 0:
+                        failures.append('worker-endpoints')
+                else:
+                    failures.append('dev-server-startup')
             else:
                 failures.append('dev-server-startup')
+            if 'dev-server-startup' in failures and os.name != 'nt':
+                subprocess.run(['ss', '-tlnp'], capture_output=False)
         for proc, log in servers:
             stop_dev(proc, log)
     else:

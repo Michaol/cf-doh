@@ -99,7 +99,7 @@ export function buildDnsQuery(name: string, type: string): Uint8Array {
 	for (const label of labels) {
 		packet[offset++] = label.length;
 		for (let i = 0; i < label.length; i++) {
-			packet[offset++] = label.charCodeAt(i); // ASCII guaranteed by validation
+			packet[offset++] = label.codePointAt(i) ?? 0; // ASCII guaranteed by validation
 		}
 	}
 	packet[offset++] = 0; // Null terminator
@@ -163,7 +163,7 @@ export async function parseDnsQuery(request: Request, url: URL): Promise<Uint8Ar
 		try {
 			// RFC 8484 GET uses base64url; atob only accepts the standard alphabet
 			const decodedQuery = atob(dnsParam.replaceAll('-', '+').replaceAll('_', '/'));
-			return Uint8Array.from(decodedQuery, (c) => c.charCodeAt(0));
+			return Uint8Array.from(decodedQuery, (c) => c.codePointAt(0) ?? 0);
 		} catch {
 			return new Response('Invalid dns parameter encoding', { status: 400 });
 		}

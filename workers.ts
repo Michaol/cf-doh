@@ -174,9 +174,24 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 	if (a.length !== b.length) return false;
 	let diff = 0;
 	for (let i = 0; i < a.length; i++) {
-		diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+		diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0);
 	}
 	return diff === 0;
+}
+
+/** Per-request config refresh from env vars (module-level state). */
+function initConfig(env: Env): void {
+	if (env.MEM_CACHE_MAX_SIZE) MEM_CACHE_MAX_SIZE = Number.parseInt(env.MEM_CACHE_MAX_SIZE, 10) || 10000;
+	if (env.CACHE_TTL_SECONDS) CACHE_TTL_SECONDS = Number.parseInt(env.CACHE_TTL_SECONDS, 10) || 86400;
+	DEBUG = env.DEBUG === 'true';
+	FORCE_AD = env.FORCE_AD !== 'false';
+	if (env.RATE_LIMIT_PER_10S) {
+		const n = Number.parseInt(env.RATE_LIMIT_PER_10S, 10);
+		if (!Number.isNaN(n) && n >= 0) RATE_LIMIT_PER_10S = n;
+	}
+	if (env.COUNTRY_PRIORITY) {
+		COUNTRY_PRIORITY = env.COUNTRY_PRIORITY.split(',').map((c) => c.trim().toUpperCase());
+	}
 }
 
 // ============================================================
@@ -185,18 +200,7 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-		// Initialize Config
-		if (env.MEM_CACHE_MAX_SIZE) MEM_CACHE_MAX_SIZE = Number.parseInt(env.MEM_CACHE_MAX_SIZE, 10) || 10000;
-		if (env.CACHE_TTL_SECONDS) CACHE_TTL_SECONDS = Number.parseInt(env.CACHE_TTL_SECONDS, 10) || 86400;
-		DEBUG = env.DEBUG === 'true';
-		FORCE_AD = env.FORCE_AD !== 'false';
-		if (env.RATE_LIMIT_PER_10S) {
-			const n = Number.parseInt(env.RATE_LIMIT_PER_10S, 10);
-			if (!Number.isNaN(n) && n >= 0) RATE_LIMIT_PER_10S = n;
-		}
-		if (env.COUNTRY_PRIORITY) {
-			COUNTRY_PRIORITY = env.COUNTRY_PRIORITY.split(',').map((c) => c.trim().toUpperCase());
-		}
+		initConfig(env);
 
 		// Initialize D1 straight from bindings for best read performance
 		geoip_db ??= env.geolite2_country;

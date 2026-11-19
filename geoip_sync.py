@@ -178,8 +178,12 @@ class WranglerD1:
         proc = None
         for attempt in range(1, WRANGLER_ATTEMPTS + 1):
             try:
-                proc = subprocess.run(cmd, capture_output=True, text=True, cwd=HERE,
-                                      timeout=WRANGLER_TIMEOUT_S)  # NOSONAR
+                # NOSONAR pythonsecurity:S6350 — safe by construction: argv list
+                # (no shell), db name regex-validated, SQL built only from
+                # sql_str-escaped literals / HEX32_RE-validated keys / ints,
+                # passed as ONE argv element after --command.
+                proc = subprocess.run(cmd, capture_output=True, text=True, cwd=HERE,  # NOSONAR
+                                      timeout=WRANGLER_TIMEOUT_S)
             except subprocess.TimeoutExpired:
                 proc = None
                 detail = f'timeout after {WRANGLER_TIMEOUT_S}s'
@@ -397,6 +401,28 @@ def ensure_schema(db):
         db.execute_file(os.path.join(HERE, 'migrations', '0002_merged_pk_schema.sql'))
 
 
+def _apply_chunks(db, manifest, chunks_dir, chunks_per_run):
+    """Apply unmarked chunks up to the per-run quota. Returns (state, applied)."""
+    applied_now = 0
+    for ch in manifest['chunks']:
+        marker = ch['file'].removesuffix('.sql')
+        existing = meta_get(db, marker)
+        if existing is not None:
+            expected_marker = f'{ch["sha"]}:{ch["rows"]}'
+            if existing != expected_marker:
+                raise SyncError(f'chunk marker mismatch for {marker}: db={existing!r} '
+                                f'manifest={expected_marker!r} — dataset changed mid-bootstrap? '
+                                'manual inspection required')
+            continue
+        if applied_now >= chunks_per_run:
+            print(f'quota guard: {chunks_per_run} chunk(s) per run; resume next run')
+            return 'partial', applied_now
+        print(f'applying {ch["file"]} ({ch["rows"]} rows)')
+        db.execute_file(os.path.join(chunks_dir, ch['file']))
+        applied_now += 1
+    return 'applied', applied_now
+
+
 def run_bootstrap(db, args, work, tag, sha, mmdb):
     ensure_schema(db)
     pinned = meta_get(db, 'bootstrap_tag')
@@ -418,23 +444,9 @@ def run_bootstrap(db, args, work, tag, sha, mmdb):
               encoding='utf-8') as f:
         manifest = json.load(f)
 
-    applied_now = 0
-    for ch in manifest['chunks']:
-        marker = ch['file'].removesuffix('.sql')
-        existing = meta_get(db, marker)
-        if existing is not None:
-            expected_marker = f'{ch["sha"]}:{ch["rows"]}'
-            if existing != expected_marker:
-                raise SyncError(f'chunk marker mismatch for {marker}: db={existing!r} '
-                                f'manifest={expected_marker!r} — dataset changed mid-bootstrap? '
-                                'manual inspection required')
-            continue
-        if applied_now >= args.chunks_per_run:
-            print(f'quota guard: {args.chunks_per_run} chunk(s) per run; resume next run')
-            return 'partial', applied_now
-        print(f'applying {ch["file"]} ({ch["rows"]} rows)')
-        db.execute_file(os.path.join(chunks_dir, ch['file']))
-        applied_now += 1
+    state, applied_now = _apply_chunks(db, manifest, chunks_dir, args.chunks_per_run)
+    if state == 'partial':
+        return 'partial', applied_now
 
     c4, c6 = table_count(db, V4_TABLE), table_count(db, V6_TABLE)
     e4, e6 = count_csv(v4csv), count_csv(v6csv)

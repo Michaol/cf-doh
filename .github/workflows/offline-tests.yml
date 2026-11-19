@@ -51,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           ./fetch_mmdb.sh tmp/mm
-          PREV=$(curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" \
+          PREV=$(curl -fsSL --proto '=https' --retry 3 -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             'https://api.github.com/repos/Loyalsoldier/geoip/releases?per_page=2' | jq -r '.[1].tag_name')
           if [[ -n "$PREV" && "$PREV" != "null" ]]; then
